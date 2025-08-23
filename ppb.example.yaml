@@ -1,0 +1,21 @@
+type: google_compute_engine
+port: 80
+scheme: http
+allowedIps: ${ALLOWED_IPS:-127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128}
+ipForwardedHeader: X-Forwarded-For
+ipDepth: 0
+powerOnCooldown: ${POWER_ON_COOLDOWN:-30}  # seconds between power-on attempts
+# Optional proxy timeout configuration (defaults shown)
+proxyTimeouts:
+  dialTimeout: 120           # Connection dial timeout in seconds
+  keepAlive: 120            # TCP keep-alive timeout in seconds  
+  idleConnTimeout: 90       # Idle connection timeout in seconds
+  tlsHandshakeTimeout: 10   # TLS handshake timeout in seconds
+  expectContinueTimeout: 1  # Expect: 100-continue timeout in seconds
+  maxIdleConns: 100        # Maximum idle connections
+machineMetadata:
+  project_id: islandora-starter-site
+  zone: us-central1-f
+  name: compose-librechat
+  # usePrivateIp=true means cloud run is using direct VPC egress to the machine
+  usePrivateIp: ${PRIVATE_IP:-false}
