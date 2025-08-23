@@ -56,7 +56,7 @@ func main() {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
-		
+
 		// Attempt to power on machine with cooldown protection
 		ctx := context.Background()
 		err := c.Machine.PowerOnWithCooldown(ctx, c.PowerOnCooldown)
@@ -65,7 +65,7 @@ func main() {
 			http.Error(w, "Backend not available", http.StatusServiceUnavailable)
 			return
 		}
-		
+
 		p.SetHost()
 		slog.Info(r.Method, "path", r.URL.Path, "host", r.Host)
 		p.ServeHTTP(w, r)

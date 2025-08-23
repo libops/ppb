@@ -13,15 +13,15 @@ import (
 )
 
 type GoogleComputeEngine struct {
-	ProjectId        string `yaml:"project_id"`
-	Zone             string `yaml:"zone"`
-	Name             string `yaml:"name"`
-	UsePrivateIp     bool   `yaml:"usePrivateIp"`
-	Lock             *semaphore.Weighted
-	host             string
-	hostMutex        sync.RWMutex
+	ProjectId          string `yaml:"project_id"`
+	Zone               string `yaml:"zone"`
+	Name               string `yaml:"name"`
+	UsePrivateIp       bool   `yaml:"usePrivateIp"`
+	Lock               *semaphore.Weighted
+	host               string
+	hostMutex          sync.RWMutex
 	LastPowerOnAttempt time.Time
-	powerOnMutex     sync.Mutex
+	powerOnMutex       sync.Mutex
 }
 
 func NewGceMachine() *GoogleComputeEngine {

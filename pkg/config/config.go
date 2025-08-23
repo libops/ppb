@@ -11,25 +11,25 @@ import (
 )
 
 type Config struct {
-	Type                 string         `yaml:"type"`
-	Scheme               string         `yaml:"scheme"`
-	Port                 int            `yaml:"port"`
-	AllowedIps           []IPNet        `yaml:"allowedIps"`
-	IpForwardedHeader    string         `yaml:"ipForwardedHeader"`
-	IpDepth              int            `yaml:"ipDepth"`
-	PowerOnCooldown     int            `yaml:"powerOnCooldown"`     // seconds
-	ProxyTimeouts        ProxyTimeouts  `yaml:"proxyTimeouts"`
-	MachineMetadata      map[string]any `yaml:"machineMetadata"`
-	Machine              *machine.GoogleComputeEngine
+	Type              string         `yaml:"type"`
+	Scheme            string         `yaml:"scheme"`
+	Port              int            `yaml:"port"`
+	AllowedIps        []IPNet        `yaml:"allowedIps"`
+	IpForwardedHeader string         `yaml:"ipForwardedHeader"`
+	IpDepth           int            `yaml:"ipDepth"`
+	PowerOnCooldown   int            `yaml:"powerOnCooldown"` // seconds
+	ProxyTimeouts     ProxyTimeouts  `yaml:"proxyTimeouts"`
+	MachineMetadata   map[string]any `yaml:"machineMetadata"`
+	Machine           *machine.GoogleComputeEngine
 }
 
 type ProxyTimeouts struct {
-	DialTimeout         int `yaml:"dialTimeout"`         // seconds, default: 120
-	KeepAlive          int `yaml:"keepAlive"`           // seconds, default: 120
-	IdleConnTimeout    int `yaml:"idleConnTimeout"`     // seconds, default: 90
-	TLSHandshakeTimeout int `yaml:"tlsHandshakeTimeout"` // seconds, default: 10
+	DialTimeout           int `yaml:"dialTimeout"`           // seconds, default: 120
+	KeepAlive             int `yaml:"keepAlive"`             // seconds, default: 120
+	IdleConnTimeout       int `yaml:"idleConnTimeout"`       // seconds, default: 90
+	TLSHandshakeTimeout   int `yaml:"tlsHandshakeTimeout"`   // seconds, default: 10
 	ExpectContinueTimeout int `yaml:"expectContinueTimeout"` // seconds, default: 1
-	MaxIdleConns       int `yaml:"maxIdleConns"`        // default: 100
+	MaxIdleConns          int `yaml:"maxIdleConns"`          // default: 100
 }
 
 type IPNet struct {

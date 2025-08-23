@@ -69,7 +69,7 @@ func TestIPNet_UnmarshalYAML(t *testing.T) {
 func TestConfig_IpIsAllowed(t *testing.T) {
 	// Create test config with allowed IPs
 	allowedNets := []IPNet{}
-	
+
 	// Add some test networks
 	cidrs := []string{"192.168.1.0/24", "10.0.0.0/8", "127.0.0.1/32"}
 	for _, cidr := range cidrs {
@@ -127,7 +127,7 @@ func TestConfig_IpIsAllowed(t *testing.T) {
 		},
 		{
 			name:           "blocked IP with multiple forwarded headers",
-			remoteAddr:     "192.168.1.1:8080", 
+			remoteAddr:     "192.168.1.1:8080",
 			forwardedFor:   "203.0.113.1, 198.51.100.1",
 			expectedResult: false,
 		},
@@ -139,14 +139,14 @@ func TestConfig_IpIsAllowed(t *testing.T) {
 				RemoteAddr: tt.remoteAddr,
 				Header:     make(http.Header),
 			}
-			
+
 			if tt.forwardedFor != "" {
 				req.Header.Set("X-Forwarded-For", tt.forwardedFor)
 			}
 
 			result := config.IpIsAllowed(req)
 			if result != tt.expectedResult {
-				t.Errorf("Config.IpIsAllowed() = %v, want %v for IP %s (forwarded: %s)", 
+				t.Errorf("Config.IpIsAllowed() = %v, want %v for IP %s (forwarded: %s)",
 					result, tt.expectedResult, tt.remoteAddr, tt.forwardedFor)
 			}
 		})
@@ -155,16 +155,16 @@ func TestConfig_IpIsAllowed(t *testing.T) {
 
 func TestConfig_getClientIP(t *testing.T) {
 	tests := []struct {
-		name           string
-		remoteAddr     string
-		forwardedFor   string
-		ipDepth        int
-		expectedIP     string
+		name         string
+		remoteAddr   string
+		forwardedFor string
+		ipDepth      int
+		expectedIP   string
 	}{
 		{
-			name:        "no forwarded header",
-			remoteAddr:  "192.168.1.1:8080",
-			expectedIP:  "192.168.1.1",
+			name:       "no forwarded header",
+			remoteAddr: "192.168.1.1:8080",
+			expectedIP: "192.168.1.1",
 		},
 		{
 			name:         "single forwarded IP",
@@ -181,15 +181,15 @@ func TestConfig_getClientIP(t *testing.T) {
 		},
 		{
 			name:         "multiple forwarded IPs, depth 1",
-			remoteAddr:   "10.0.0.1:8080", 
+			remoteAddr:   "10.0.0.1:8080",
 			forwardedFor: "203.0.113.1, 198.51.100.1, 192.168.1.1",
 			ipDepth:      1,
 			expectedIP:   "198.51.100.1",
 		},
 		{
-			name:         "IPv6 remote addr",
-			remoteAddr:   "[2001:db8::1]:8080",
-			expectedIP:   "2001:db8::1",
+			name:       "IPv6 remote addr",
+			remoteAddr: "[2001:db8::1]:8080",
+			expectedIP: "2001:db8::1",
 		},
 	}
 
@@ -204,7 +204,7 @@ func TestConfig_getClientIP(t *testing.T) {
 				RemoteAddr: tt.remoteAddr,
 				Header:     make(http.Header),
 			}
-			
+
 			if tt.forwardedFor != "" {
 				req.Header.Set("X-Forwarded-For", tt.forwardedFor)
 			}
@@ -219,14 +219,14 @@ func TestConfig_getClientIP(t *testing.T) {
 
 func TestConfig_PowerOnCooldownDefaultValue(t *testing.T) {
 	config := &Config{}
-	
+
 	// Test that default is applied in main.go logic
 	// (We can't easily test the main.go logic here, but we can test the field exists)
 	if config.PowerOnCooldown != 0 {
 		// Should start at 0, then main.go sets to 30 if <= 0
 		t.Errorf("PowerOnCooldown should start at 0, got %v", config.PowerOnCooldown)
 	}
-	
+
 	// Test setting a custom value
 	config.PowerOnCooldown = 60
 	if config.PowerOnCooldown != 60 {
@@ -247,28 +247,28 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 			},
 			expected: ProxyTimeouts{
 				DialTimeout:           120,
-				KeepAlive:            120,
-				IdleConnTimeout:      90,
-				TLSHandshakeTimeout:  10,
+				KeepAlive:             120,
+				IdleConnTimeout:       90,
+				TLSHandshakeTimeout:   10,
 				ExpectContinueTimeout: 1,
-				MaxIdleConns:         100,
+				MaxIdleConns:          100,
 			},
 		},
 		{
 			name: "partial config gets defaults for missing values",
 			config: Config{
 				ProxyTimeouts: ProxyTimeouts{
-					DialTimeout: 60,
+					DialTimeout:  60,
 					MaxIdleConns: 50,
 				},
 			},
 			expected: ProxyTimeouts{
 				DialTimeout:           60,  // custom
-				KeepAlive:            120, // default
-				IdleConnTimeout:      90,  // default
-				TLSHandshakeTimeout:  10,  // default
-				ExpectContinueTimeout: 1,  // default
-				MaxIdleConns:         50,  // custom 
+				KeepAlive:             120, // default
+				IdleConnTimeout:       90,  // default
+				TLSHandshakeTimeout:   10,  // default
+				ExpectContinueTimeout: 1,   // default
+				MaxIdleConns:          50,  // custom
 			},
 		},
 		{
@@ -276,20 +276,20 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 			config: Config{
 				ProxyTimeouts: ProxyTimeouts{
 					DialTimeout:           30,
-					KeepAlive:            40,
-					IdleConnTimeout:      50,
-					TLSHandshakeTimeout:  5,
+					KeepAlive:             40,
+					IdleConnTimeout:       50,
+					TLSHandshakeTimeout:   5,
 					ExpectContinueTimeout: 2,
-					MaxIdleConns:         200,
+					MaxIdleConns:          200,
 				},
 			},
 			expected: ProxyTimeouts{
 				DialTimeout:           30,
-				KeepAlive:            40,
-				IdleConnTimeout:      50,
-				TLSHandshakeTimeout:  5,
+				KeepAlive:             40,
+				IdleConnTimeout:       50,
+				TLSHandshakeTimeout:   5,
 				ExpectContinueTimeout: 2,
-				MaxIdleConns:         200,
+				MaxIdleConns:          200,
 			},
 		},
 	}
@@ -297,7 +297,7 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.config.setProxyTimeoutDefaults()
-			
+
 			if tt.config.ProxyTimeouts.DialTimeout != tt.expected.DialTimeout {
 				t.Errorf("DialTimeout = %v, want %v", tt.config.ProxyTimeouts.DialTimeout, tt.expected.DialTimeout)
 			}
@@ -340,11 +340,11 @@ proxyTimeouts:
 `,
 			expected: ProxyTimeouts{
 				DialTimeout:           60,
-				KeepAlive:            90,
-				IdleConnTimeout:      45,
-				TLSHandshakeTimeout:  15,
+				KeepAlive:             90,
+				IdleConnTimeout:       45,
+				TLSHandshakeTimeout:   15,
 				ExpectContinueTimeout: 2,
-				MaxIdleConns:         200,
+				MaxIdleConns:          200,
 			},
 			wantErr: false,
 		},
@@ -380,7 +380,7 @@ proxyTimeouts: {}
 
 			var config configWithTimeouts
 			err := yaml.Unmarshal([]byte(tt.yamlData), &config)
-			
+
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Unmarshal() error = %v, wantErr %v", err, tt.wantErr)
 				return

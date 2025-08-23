@@ -27,7 +27,7 @@ func New(c *config.Config) *ReverseProxy {
 	idleConnTimeout := time.Duration(c.ProxyTimeouts.IdleConnTimeout) * time.Second
 	tlsHandshakeTimeout := time.Duration(c.ProxyTimeouts.TLSHandshakeTimeout) * time.Second
 	expectContinueTimeout := time.Duration(c.ProxyTimeouts.ExpectContinueTimeout) * time.Second
-	
+
 	return &ReverseProxy{
 		Target: &url.URL{
 			Scheme: c.Scheme,

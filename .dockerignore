@@ -2,3 +2,6 @@
 .github
 *.md
 Dockerfile
+gha-creds-*.json
+renovate.json5
+*.yaml

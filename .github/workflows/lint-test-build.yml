@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: check valid yml
-        run: yq . *.yml
+        run: yq . *.yaml
 
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
@@ -44,8 +44,9 @@ jobs:
 
   build-push:
     needs: [lint-test]
-    uses: libops/actions/.github/workflows/build-push.yaml@main
+    uses: libops/actions/.github/workflows/build-push.yml@main
     permissions:
       contents: read
       packages: write
+      id-token: write
     secrets: inherit

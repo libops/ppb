@@ -11,46 +11,46 @@ import (
 
 func TestGoogleComputeEngine_PowerOnWithCooldown(t *testing.T) {
 	tests := []struct {
-		name              string
-		cooldownSeconds   int
-		initialHost       string
-		timeBetweenCalls  time.Duration
-		expectAPICall     bool
-		expectError       bool
-		needsSynctest     bool
+		name             string
+		cooldownSeconds  int
+		initialHost      string
+		timeBetweenCalls time.Duration
+		expectAPICall    bool
+		expectError      bool
+		needsSynctest    bool
 	}{
 		{
-			name:              "first call should always make API call",
-			cooldownSeconds:   30,
-			timeBetweenCalls:  0,
-			expectAPICall:     true,
-			expectError:       false,
-			needsSynctest:     false,
+			name:             "first call should always make API call",
+			cooldownSeconds:  30,
+			timeBetweenCalls: 0,
+			expectAPICall:    true,
+			expectError:      false,
+			needsSynctest:    false,
 		},
 		{
-			name:              "second call within cooldown should skip API call if host is set",
-			cooldownSeconds:   30,
-			initialHost:       "10.0.0.1",
-			timeBetweenCalls:  10 * time.Second,
-			expectAPICall:     false,
-			expectError:       false,
-			needsSynctest:     true,
+			name:             "second call within cooldown should skip API call if host is set",
+			cooldownSeconds:  30,
+			initialHost:      "10.0.0.1",
+			timeBetweenCalls: 10 * time.Second,
+			expectAPICall:    false,
+			expectError:      false,
+			needsSynctest:    true,
 		},
 		{
-			name:              "second call within cooldown without host should return error",
-			cooldownSeconds:   30,
-			timeBetweenCalls:  10 * time.Second,
-			expectAPICall:     false,
-			expectError:       true,
-			needsSynctest:     true,
+			name:             "second call within cooldown without host should return error",
+			cooldownSeconds:  30,
+			timeBetweenCalls: 10 * time.Second,
+			expectAPICall:    false,
+			expectError:      true,
+			needsSynctest:    true,
 		},
 		{
-			name:              "call after cooldown period should make API call",
-			cooldownSeconds:   5,
-			timeBetweenCalls:  6 * time.Second,
-			expectAPICall:     true,
-			expectError:       false,
-			needsSynctest:     true,
+			name:             "call after cooldown period should make API call",
+			cooldownSeconds:  5,
+			timeBetweenCalls: 6 * time.Second,
+			expectAPICall:    true,
+			expectError:      false,
+			needsSynctest:    true,
 		},
 	}
 
