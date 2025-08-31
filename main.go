@@ -35,13 +35,13 @@ func init() {
 	slog.SetDefault(handler)
 }
 
-func startPingRoutine(ctx context.Context, wg *sync.WaitGroup, c *config.Config) {
+func startPingRoutine(ctx context.Context, wg *sync.WaitGroup, c *config.Config, interval time.Duration) {
 	defer wg.Done()
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	slog.Info("Starting ping routine to GCE instance")
+	slog.Info("Starting ping routine to GCE instance", "interval", interval)
 
 	for {
 		select {
@@ -88,18 +88,13 @@ func main() {
 		c.PowerOnCooldown = 30
 	}
 
-	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
-
-	// Start ping routine
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go startPingRoutine(ctx, &wg, c)
+	go startPingRoutine(ctx, &wg, c, 30*time.Second)
 
 	http.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -127,7 +122,6 @@ func main() {
 		p.ServeHTTP(w, r)
 	})
 
-	// Start HTTP server in a goroutine
 	server := &http.Server{Addr: ":8080"}
 	go func() {
 		slog.Info("Server listening on :8080")
@@ -136,22 +130,16 @@ func main() {
 		}
 	}()
 
-	// Wait for shutdown signal
 	<-sigChan
 	slog.Info("Received shutdown signal, gracefully shutting down...")
-
-	// Cancel context to stop ping routine
 	cancel()
 
-	// Shutdown HTTP server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("Server shutdown error", "err", err)
 	}
 
-	// Wait for ping routine to finish
 	wg.Wait()
 	slog.Info("Shutdown complete")
 }
