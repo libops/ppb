@@ -7,12 +7,23 @@ This service is designed to run on **Google Cloud Run as an ingress layer** in f
 ## Architecture
 
 ```
-Internet → Cloud Run (PPB) → Google Compute Engine (Full App Stack)
+Internet → Cloud Run (PPB) → Google Compute Engine (Full App Stack + lightsout)
 ```
 
 - **Cloud Run**: Runs PPB as serverless ingress, scales to zero when no traffic
 - **GCE VM**: Runs your complete application (web server, database, etc.), can power off when idle
 - **PPB**: Powers on the VM when requests arrive, proxies traffic through with IP authorization
+- **lightsout**: Monitors activity and automatically shuts down VMs during idle periods (optional companion service)
+
+### Complete On-Demand Infrastructure
+
+PPB works seamlessly with [lightsout](https://github.com/libops/lightsout) to create a complete on-demand infrastructure solution:
+
+- **PPB handles startup**: Automatically powers on GCE instances when traffic arrives
+- **lightsout handles shutdown**: Monitors activity and automatically suspends instances during idle periods
+- **Cost optimization**: Only pay for compute resources when actively serving traffic
+
+Deploy lightsout alongside your application on the GCE instance to complete the automation cycle.
 
 ## Cloud Run Behavior
 
