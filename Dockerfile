@@ -1,11 +1,20 @@
-FROM golang:1.25-alpine3.22@sha256:d3f0cf7723f3429e3f9ed846243970b20a2de7bae6a5b66fc5914e228d831bbb
+FROM ghcr.io/libops/go1.25:main@sha256:f43c9b34f888d2ac53e87c8e061554f826b8eb580863d7b21fd787b6f0378f8f AS builder
+
+SHELL ["/bin/ash", "-o", "pipefail", "-ex", "-c"]
 
 WORKDIR /app
 
-COPY . ./
+COPY go.* ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
-RUN go mod download \
-    && go build -o /app/ppb  \
-    && go clean -cache -modcache
+COPY *.go ./
+COPY pkg ./pkg
 
-ENTRYPOINT ["/app/ppb"]
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/binary .
+
+FROM ghcr.io/libops/go1.25:main@sha256:f43c9b34f888d2ac53e87c8e061554f826b8eb580863d7b21fd787b6f0378f8f
+
+COPY --from=builder /app/binary /app/binary
+
