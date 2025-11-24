@@ -107,6 +107,7 @@ PPB also supports these environment variables for runtime configuration:
 
 | Variable                         | Description                                  | Default                  |
 |----------------------------------|----------------------------------------------|--------------------------|
+| `PPB_YAML`                       | YAML configuration content (takes priority)  | -                        |
 | `PPB_CONFIG_PATH`                | Path to YAML configuration file              | /app/ppb.yaml            |
 | `LOG_LEVEL`                      | Log level (`DEBUG`, `INFO`, `WARN`, `ERROR`) | `INFO`                   |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON file            | Uses default credentials |

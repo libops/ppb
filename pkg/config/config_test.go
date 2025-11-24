@@ -3,6 +3,7 @@ package config
 import (
 	"net"
 	"net/http"
+	"os"
 	"testing"
 
 	yaml "gopkg.in/yaml.v3"
@@ -317,6 +318,97 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 				t.Errorf("MaxIdleConns = %v, want %v", tt.config.ProxyTimeouts.MaxIdleConns, tt.expected.MaxIdleConns)
 			}
 		})
+	}
+}
+
+func TestLoadConfig_WithPPB_YAML(t *testing.T) {
+	// Save original env vars
+	originalYAML := os.Getenv("PPB_YAML")
+	originalPath := os.Getenv("PPB_CONFIG_PATH")
+	defer func() {
+		os.Setenv("PPB_YAML", originalYAML)
+		os.Setenv("PPB_CONFIG_PATH", originalPath)
+	}()
+
+	tests := []struct {
+		name        string
+		yamlContent string
+		wantErr     bool
+		wantType    string
+	}{
+		{
+			name: "valid YAML via PPB_YAML",
+			yamlContent: `type: google_compute_engine
+scheme: https
+port: 443
+allowedIps:
+  - 0.0.0.0/0
+machineMetadata:
+  project_id: test-project
+  zone: us-central1-a
+  name: test-instance`,
+			wantErr:  false,
+			wantType: "google_compute_engine",
+		},
+		{
+			name:        "invalid YAML via PPB_YAML",
+			yamlContent: "invalid: yaml: content: [[[",
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv("PPB_YAML", tt.yamlContent)
+			os.Unsetenv("PPB_CONFIG_PATH")
+
+			config, err := LoadConfig()
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("LoadConfig() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				if config.Type != tt.wantType {
+					t.Errorf("LoadConfig() Type = %v, want %v", config.Type, tt.wantType)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadConfig_PriorityOrder(t *testing.T) {
+	// Save original env vars
+	originalYAML := os.Getenv("PPB_YAML")
+	originalPath := os.Getenv("PPB_CONFIG_PATH")
+	defer func() {
+		os.Setenv("PPB_YAML", originalYAML)
+		os.Setenv("PPB_CONFIG_PATH", originalPath)
+	}()
+
+	yamlContent := `type: google_compute_engine
+scheme: https
+port: 443
+allowedIps:
+  - 0.0.0.0/0
+machineMetadata:
+  project_id: from-env-var
+  zone: us-central1-a
+  name: test-instance`
+
+	// Test that PPB_YAML takes priority over PPB_CONFIG_PATH
+	os.Setenv("PPB_YAML", yamlContent)
+	os.Setenv("PPB_CONFIG_PATH", "/nonexistent/file.yaml")
+
+	config, err := LoadConfig()
+	if err != nil {
+		t.Errorf("LoadConfig() should succeed with PPB_YAML even if PPB_CONFIG_PATH is invalid, error = %v", err)
+		return
+	}
+
+	if config.Machine.ProjectId != "from-env-var" {
+		t.Errorf("LoadConfig() should load from PPB_YAML, got project_id = %v, want from-env-var", config.Machine.ProjectId)
 	}
 }
 

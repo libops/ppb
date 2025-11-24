@@ -52,15 +52,27 @@ func (i *IPNet) UnmarshalYAML(value *yaml.Node) error {
 }
 
 func LoadConfig() (*Config, error) {
-	filename := os.Getenv("PPB_CONFIG_PATH")
-	if filename == "" {
-		filename = "ppb.yaml"
+	var data []byte
+	var err error
+
+	// Check for PPB_YAML environment variable first (highest priority)
+	yamlContent := os.Getenv("PPB_YAML")
+	if yamlContent != "" {
+		slog.Debug("Loading config from PPB_YAML environment variable")
+		data = []byte(yamlContent)
+	} else {
+		// Fall back to file-based configuration
+		filename := os.Getenv("PPB_CONFIG_PATH")
+		if filename == "" {
+			filename = "ppb.yaml"
+		}
+		slog.Debug("Loading config", "filename", filename)
+		data, err = os.ReadFile(filename)
+		if err != nil {
+			return nil, err
+		}
 	}
-	slog.Debug("Loading config", "filename", filename)
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
+
 	expandedYaml := os.ExpandEnv(string(data))
 
 	var config Config
