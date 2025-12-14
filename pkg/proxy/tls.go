@@ -18,6 +18,9 @@ type ReverseProxy struct {
 	Target    *url.URL
 	Transport *http.Transport
 	Config    *config.Config
+	Host      []string
+	Ip        []string
+	Trace     []string
 }
 
 func New(c *config.Config) *ReverseProxy {
@@ -60,7 +63,7 @@ func (p *ReverseProxy) SetHost() {
 		p.Config.Machine.Host(),
 		strconv.Itoa(p.Config.Port),
 	)
-	slog.Debug("Set host", "host", p.Target.Host)
+	slog.Debug("Set machine host", "host", p.Target.Host)
 }
 
 func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -68,9 +71,24 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Transport: p.Transport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(p.Target)
-			pr.SetXForwarded()
+			pr.Out.Header["X-Cloud-Trace-Context"] = p.Trace
+			pr.Out.Header["X-Forwarded-For"] = p.Ip
+			pr.Out.Header["X-Forwarded-Host"] = p.Host
 		},
 	}
 
 	rp.ServeHTTP(w, r)
+}
+
+func (p *ReverseProxy) SetRequestHeaders(r *http.Request) {
+	p.Ip = []string{
+		r.Header.Get("X-Forwarded-For"),
+	}
+	p.Host = []string{
+		r.Host,
+	}
+	p.Trace = []string{
+		r.Header.Get("X-Cloud-Trace-Context"),
+	}
+	slog.Debug("Request headers", "p.Ip", p.Ip, "p.Host", p.Host)
 }

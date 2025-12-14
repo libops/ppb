@@ -117,8 +117,8 @@ func main() {
 			return
 		}
 
+		p.SetRequestHeaders(r)
 		p.SetHost()
-		slog.Info(r.Method, "path", r.URL.Path, "host", r.Host)
 		p.ServeHTTP(w, r)
 	})
 
