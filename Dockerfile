@@ -1,4 +1,4 @@
-FROM ghcr.io/libops/go1.25:main@sha256:f43c9b34f888d2ac53e87c8e061554f826b8eb580863d7b21fd787b6f0378f8f AS builder
+FROM ghcr.io/libops/base:main@sha256:1185f74227c1c935b811e24971cc1b2d5deb615b9028779387a575027ef84d9d AS builder
 
 SHELL ["/bin/ash", "-o", "pipefail", "-ex", "-c"]
 
@@ -14,7 +14,12 @@ COPY pkg ./pkg
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/binary .
 
-FROM ghcr.io/libops/go1.25:main@sha256:f43c9b34f888d2ac53e87c8e061554f826b8eb580863d7b21fd787b6f0378f8f
+FROM ghcr.io/libops/base:main@sha256:1185f74227c1c935b811e24971cc1b2d5deb615b9028779387a575027ef84d9d
 
 COPY --from=builder /app/binary /app/binary
 
+USER goapp
+
+ENTRYPOINT [ "/app/binary" ]
+
+HEALTHCHECK CMD curl -sf -o /dev/null http://localhost:8080/healthcheck || exit 1
