@@ -74,6 +74,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header["X-Cloud-Trace-Context"] = p.Trace
 			pr.Out.Header["X-Forwarded-For"] = p.Ip
 			pr.Out.Header["X-Forwarded-Host"] = p.Host
+			pr.Out.Header["X-Forwarded-Proto"] = []string{"https"}
 		},
 	}
 
