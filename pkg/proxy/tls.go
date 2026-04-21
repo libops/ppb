@@ -31,9 +31,13 @@ func New(c *config.Config) *ReverseProxy {
 	tlsHandshakeTimeout := time.Duration(c.ProxyTimeouts.TLSHandshakeTimeout) * time.Second
 	expectContinueTimeout := time.Duration(c.ProxyTimeouts.ExpectContinueTimeout) * time.Second
 
+	scheme := c.Scheme
+	if c.ProxyTarget != nil && c.ProxyTarget.Scheme != "" {
+		scheme = c.ProxyTarget.Scheme
+	}
 	return &ReverseProxy{
 		Target: &url.URL{
-			Scheme: c.Scheme,
+			Scheme: scheme,
 		},
 		Config: c,
 		Transport: &http.Transport{
@@ -59,6 +63,15 @@ func New(c *config.Config) *ReverseProxy {
 }
 
 func (p *ReverseProxy) SetHost() {
+	if p.Config.ProxyTarget != nil && p.Config.ProxyTarget.Host != "" {
+		port := p.Config.ProxyTarget.Port
+		if port == 0 {
+			port = p.Config.Port
+		}
+		p.Target.Host = net.JoinHostPort(p.Config.ProxyTarget.Host, strconv.Itoa(port))
+		slog.Debug("Set proxy target host", "host", p.Target.Host)
+		return
+	}
 	p.Target.Host = net.JoinHostPort(
 		p.Config.Machine.Host(),
 		strconv.Itoa(p.Config.Port),

@@ -156,3 +156,26 @@ func TestReverseProxy_SetHost(t *testing.T) {
 		t.Error("Target is nil after SetHost()")
 	}
 }
+
+func TestReverseProxy_SetHost_ProxyTargetOverride(t *testing.T) {
+	config := &config.Config{
+		Scheme: "http",
+		Port:   8080,
+		ProxyTarget: &config.ProxyTarget{
+			Scheme: "http",
+			Host:   "localhost",
+			Port:   9000,
+		},
+		Machine: machine.NewGceMachine(),
+	}
+
+	proxy := New(config)
+	proxy.SetHost()
+
+	if proxy.Target.Host != "localhost:9000" {
+		t.Errorf("Target.Host = %q, want localhost:9000", proxy.Target.Host)
+	}
+	if proxy.Target.Scheme != "http" {
+		t.Errorf("Target.Scheme = %q, want http", proxy.Target.Scheme)
+	}
+}
