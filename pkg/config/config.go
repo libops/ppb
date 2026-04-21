@@ -20,7 +20,19 @@ type Config struct {
 	PowerOnCooldown   int            `yaml:"powerOnCooldown"` // seconds
 	ProxyTimeouts     ProxyTimeouts  `yaml:"proxyTimeouts"`
 	MachineMetadata   map[string]any `yaml:"machineMetadata"`
+	ProxyTarget       *ProxyTarget   `yaml:"proxyTarget"`
 	Machine           *machine.GoogleComputeEngine
+}
+
+// ProxyTarget optionally overrides where requests are proxied to.
+// When set, the machine referenced by MachineMetadata is still powered on and
+// pinged, but HTTP traffic is forwarded to ProxyTarget instead. This supports
+// topologies where a sidecar (e.g. a Cloud Run frontend container) serves
+// requests while still depending on the remote machine being up.
+type ProxyTarget struct {
+	Scheme string `yaml:"scheme"`
+	Host   string `yaml:"host"`
+	Port   int    `yaml:"port"`
 }
 
 type ProxyTimeouts struct {
