@@ -219,3 +219,32 @@ func TestReverseProxy_ServeHTTPReturnsUnavailableWhenHostMissing(t *testing.T) {
 		t.Fatalf("ServeHTTP status = %d, want %d", resp.Code, http.StatusServiceUnavailable)
 	}
 }
+
+func TestReverseProxy_TargetURLUsesProxyTargetOverride(t *testing.T) {
+	config := &config.Config{
+		Scheme: "http",
+		Port:   8080,
+		ProxyTarget: &config.ProxyTarget{
+			Scheme: "http",
+			Host:   "localhost",
+			Port:   9000,
+		},
+		Machine: machine.NewGceMachine(),
+	}
+
+	proxy := New(config)
+	target, ok := proxy.targetURL()
+	if !ok {
+		t.Fatal("targetURL ok = false, want true")
+	}
+
+	if target.Host != "localhost:9000" {
+		t.Errorf("Target.Host = %q, want localhost:9000", target.Host)
+	}
+	if target.Scheme != "http" {
+		t.Errorf("Target.Scheme = %q, want http", target.Scheme)
+	}
+	if proxy.Target.Host != "" {
+		t.Errorf("proxy.Target.Host = %q, want request-local target to leave shared target untouched", proxy.Target.Host)
+	}
+}

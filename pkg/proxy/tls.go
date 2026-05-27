@@ -26,9 +26,13 @@ func New(c *config.Config) *ReverseProxy {
 	tlsHandshakeTimeout := time.Duration(c.ProxyTimeouts.TLSHandshakeTimeout) * time.Second
 	expectContinueTimeout := time.Duration(c.ProxyTimeouts.ExpectContinueTimeout) * time.Second
 
+	scheme := c.Scheme
+	if c.ProxyTarget != nil && c.ProxyTarget.Scheme != "" {
+		scheme = c.ProxyTarget.Scheme
+	}
 	return &ReverseProxy{
 		Target: &url.URL{
-			Scheme: c.Scheme,
+			Scheme: scheme,
 		},
 		Config: c,
 		Transport: &http.Transport{
@@ -47,6 +51,20 @@ func New(c *config.Config) *ReverseProxy {
 }
 
 func (p *ReverseProxy) targetURL() (*url.URL, bool) {
+	if p.Config.ProxyTarget != nil && p.Config.ProxyTarget.Host != "" {
+		port := p.Config.ProxyTarget.Port
+		if port == 0 {
+			port = p.Config.Port
+		}
+		target := *p.Target
+		if p.Config.ProxyTarget.Scheme != "" {
+			target.Scheme = p.Config.ProxyTarget.Scheme
+		}
+		target.Host = net.JoinHostPort(p.Config.ProxyTarget.Host, strconv.Itoa(port))
+		slog.Debug("Set proxy target host", "host", target.Host)
+		return &target, true
+	}
+
 	host := p.Config.Machine.Host()
 	if host == "" {
 		return nil, false
@@ -77,6 +95,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header["X-Cloud-Trace-Context"] = trace
 			pr.Out.Header["X-Forwarded-For"] = ip
 			pr.Out.Header["X-Forwarded-Host"] = host
+			pr.Out.Header["X-Forwarded-Proto"] = []string{"https"}
 		},
 	}
 
