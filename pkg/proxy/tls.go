@@ -1,8 +1,6 @@
 package proxy
 
 import (
-	"context"
-	"crypto/tls"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,9 +16,6 @@ type ReverseProxy struct {
 	Target    *url.URL
 	Transport *http.Transport
 	Config    *config.Config
-	Host      []string
-	Ip        []string
-	Trace     []string
 }
 
 func New(c *config.Config) *ReverseProxy {
@@ -42,13 +37,6 @@ func New(c *config.Config) *ReverseProxy {
 				Timeout:   dialTimeout,
 				KeepAlive: keepAlive,
 			}).DialContext,
-			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				dialer := &net.Dialer{
-					Timeout:   dialTimeout,
-					KeepAlive: keepAlive,
-				}
-				return tls.DialWithDialer(dialer, network, addr, nil)
-			},
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          c.ProxyTimeouts.MaxIdleConns,
 			IdleConnTimeout:       idleConnTimeout,
@@ -58,37 +46,39 @@ func New(c *config.Config) *ReverseProxy {
 	}
 }
 
-func (p *ReverseProxy) SetHost() {
-	p.Target.Host = net.JoinHostPort(
-		p.Config.Machine.Host(),
-		strconv.Itoa(p.Config.Port),
-	)
-	slog.Debug("Set machine host", "host", p.Target.Host)
+func (p *ReverseProxy) targetURL() (*url.URL, bool) {
+	host := p.Config.Machine.Host()
+	if host == "" {
+		return nil, false
+	}
+
+	target := *p.Target
+	target.Host = net.JoinHostPort(host, strconv.Itoa(p.Config.Port))
+	slog.Debug("Set machine host", "host", target.Host)
+	return &target, true
 }
 
 func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	target, ok := p.targetURL()
+	if !ok {
+		http.Error(w, "Backend not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	ip := []string{r.Header.Get("X-Forwarded-For")}
+	host := []string{r.Host}
+	trace := []string{r.Header.Get("X-Cloud-Trace-Context")}
+	slog.Debug("Request headers", "ip", ip, "host", host)
+
 	rp := &httputil.ReverseProxy{
 		Transport: p.Transport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(p.Target)
-			pr.Out.Header["X-Cloud-Trace-Context"] = p.Trace
-			pr.Out.Header["X-Forwarded-For"] = p.Ip
-			pr.Out.Header["X-Forwarded-Host"] = p.Host
+			pr.SetURL(target)
+			pr.Out.Header["X-Cloud-Trace-Context"] = trace
+			pr.Out.Header["X-Forwarded-For"] = ip
+			pr.Out.Header["X-Forwarded-Host"] = host
 		},
 	}
 
 	rp.ServeHTTP(w, r)
-}
-
-func (p *ReverseProxy) SetRequestHeaders(r *http.Request) {
-	p.Ip = []string{
-		r.Header.Get("X-Forwarded-For"),
-	}
-	p.Host = []string{
-		r.Host,
-	}
-	p.Trace = []string{
-		r.Header.Get("X-Cloud-Trace-Context"),
-	}
-	slog.Debug("Request headers", "p.Ip", p.Ip, "p.Host", p.Host)
 }

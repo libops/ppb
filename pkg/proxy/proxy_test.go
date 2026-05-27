@@ -1,6 +1,11 @@
 package proxy
 
 import (
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -121,21 +126,42 @@ func TestNew_UsesConfiguredTimeouts(t *testing.T) {
 			if transport.DialContext == nil {
 				t.Error("DialContext is nil")
 			}
-
-			if transport.DialTLSContext == nil {
-				t.Error("DialTLSContext is nil")
-			}
 		})
 	}
 }
 
-func TestReverseProxy_SetHost(t *testing.T) {
-	// Create a mock machine with a known host
+func TestReverseProxy_ServeHTTPUsesRequestLocalTargetAndHeaders(t *testing.T) {
+	var gotForwardedFor string
+	var gotForwardedHost string
+	var gotTrace string
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotForwardedFor = r.Header.Get("X-Forwarded-For")
+		gotForwardedHost = r.Header.Get("X-Forwarded-Host")
+		gotTrace = r.Header.Get("X-Cloud-Trace-Context")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatalf("parse backend URL: %v", err)
+	}
+	host, portString, err := net.SplitHostPort(backendURL.Host)
+	if err != nil {
+		t.Fatalf("split backend host: %v", err)
+	}
+	port, err := strconv.Atoi(portString)
+	if err != nil {
+		t.Fatalf("parse backend port: %v", err)
+	}
+
 	machine := machine.NewGceMachine()
+	machine.SetHostForTesting(host)
 
 	config := &config.Config{
-		Scheme: "http",
-		Port:   8080,
+		Scheme: backendURL.Scheme,
+		Port:   port,
 		ProxyTimeouts: config.ProxyTimeouts{
 			DialTimeout:           120,
 			KeepAlive:             120,
@@ -148,11 +174,48 @@ func TestReverseProxy_SetHost(t *testing.T) {
 	}
 
 	proxy := New(config)
-	proxy.SetHost()
+	req := httptest.NewRequest(http.MethodGet, "http://customer.example/path", nil)
+	req.Host = "customer.example"
+	req.Header.Set("X-Forwarded-For", "198.51.100.8")
+	req.Header.Set("X-Cloud-Trace-Context", "trace-id")
+	resp := httptest.NewRecorder()
 
-	// Verify the target host format is correct when machine has a host
-	// This test is limited without being able to mock the machine host
-	if proxy.Target == nil {
-		t.Error("Target is nil after SetHost()")
+	proxy.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("ServeHTTP status = %d, want %d", resp.Code, http.StatusNoContent)
+	}
+	if gotForwardedFor != "198.51.100.8" {
+		t.Errorf("X-Forwarded-For = %q, want %q", gotForwardedFor, "198.51.100.8")
+	}
+	if gotForwardedHost != "customer.example" {
+		t.Errorf("X-Forwarded-Host = %q, want %q", gotForwardedHost, "customer.example")
+	}
+	if gotTrace != "trace-id" {
+		t.Errorf("X-Cloud-Trace-Context = %q, want %q", gotTrace, "trace-id")
+	}
+}
+
+func TestReverseProxy_ServeHTTPReturnsUnavailableWhenHostMissing(t *testing.T) {
+	config := &config.Config{
+		Scheme: "http",
+		Port:   8080,
+		ProxyTimeouts: config.ProxyTimeouts{
+			DialTimeout:           120,
+			KeepAlive:             120,
+			IdleConnTimeout:       90,
+			TLSHandshakeTimeout:   10,
+			ExpectContinueTimeout: 1,
+			MaxIdleConns:          100,
+		},
+		Machine: machine.NewGceMachine(),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://customer.example/path", nil)
+	resp := httptest.NewRecorder()
+	New(config).ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("ServeHTTP status = %d, want %d", resp.Code, http.StatusServiceUnavailable)
 	}
 }

@@ -67,7 +67,9 @@ func startPingRoutine(ctx context.Context, wg *sync.WaitGroup, c *config.Config,
 				slog.Debug("Ping failed", "url", pingURL, "error", err)
 				continue
 			}
-			resp.Body.Close()
+			if err := resp.Body.Close(); err != nil {
+				slog.Debug("Ping response close failed", "url", pingURL, "error", err)
+			}
 
 			slog.Debug("Ping successful", "url", pingURL, "status", resp.StatusCode)
 		}
@@ -109,20 +111,23 @@ func main() {
 		}
 
 		// Attempt to power on machine with cooldown protection
-		reqCtx := context.Background()
-		err := c.Machine.PowerOnWithCooldown(reqCtx, c.PowerOnCooldown)
+		err := c.Machine.PowerOnWithCooldown(r.Context(), c.PowerOnCooldown)
 		if err != nil {
 			slog.Error("Power-on attempt failed", "err", err)
 			http.Error(w, "Backend not available", http.StatusServiceUnavailable)
 			return
 		}
 
-		p.SetRequestHeaders(r)
-		p.SetHost()
 		p.ServeHTTP(w, r)
 	})
 
-	server := &http.Server{Addr: ":8080"}
+	server := &http.Server{
+		Addr:              ":8080",
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	go func() {
 		slog.Info("Server listening on :8080")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

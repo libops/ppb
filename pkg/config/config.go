@@ -2,9 +2,12 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/libops/ppb/pkg/machine"
 	yaml "gopkg.in/yaml.v3"
@@ -67,7 +70,7 @@ func LoadConfig() (*Config, error) {
 			filename = "ppb.yaml"
 		}
 		slog.Debug("Loading config", "filename", filename)
-		data, err = os.ReadFile(filename)
+		data, err = readConfigFile(filename)
 		if err != nil {
 			return nil, err
 		}
@@ -98,6 +101,43 @@ func LoadConfig() (*Config, error) {
 	config.setProxyTimeoutDefaults()
 
 	return &config, nil
+}
+
+func readConfigFile(filename string) ([]byte, error) {
+	rootPath := "."
+	configPath := filepath.Clean(filename)
+	if filepath.IsAbs(configPath) {
+		rootPath = "/app"
+		rel, err := filepath.Rel(rootPath, configPath)
+		if err != nil {
+			return nil, fmt.Errorf("invalid config path: %w", err)
+		}
+		configPath = rel
+	}
+	if configPath == "." || filepath.IsAbs(configPath) || strings.HasPrefix(configPath, ".."+string(os.PathSeparator)) || configPath == ".." {
+		return nil, fmt.Errorf("config path must stay within the config root")
+	}
+
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			slog.Debug("config root close failed", "error", closeErr)
+		}
+	}()
+
+	file, err := root.Open(configPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Debug("config file close failed", "error", closeErr)
+		}
+	}()
+	return io.ReadAll(file)
 }
 
 // setProxyTimeoutDefaults sets default values for proxy timeouts if not configured
