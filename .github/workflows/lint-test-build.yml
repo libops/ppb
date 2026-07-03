@@ -7,15 +7,15 @@ jobs:
   lint-test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: "go.mod"
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: latest
 
@@ -31,7 +31,7 @@ jobs:
         run: go test -v -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: upload coverage to codecov
-        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           files: ./coverage.out
           fail_ci_if_error: false
@@ -40,7 +40,7 @@ jobs:
 
   run:
     needs: [lint-test]
-    uses: libops/.github/.github/workflows/build-push.yaml@d7f0ba06b4c8a1f8559892ea65a0b1af4d024dd3 # main
+    uses: libops/.github/.github/workflows/build-push.yaml@3ef8469c16c40842cc1b0b9195df2850ad8e616f # main
     permissions:
       contents: read
       packages: write
