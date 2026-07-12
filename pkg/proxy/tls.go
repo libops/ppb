@@ -2,57 +2,56 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
+	cryptorand "crypto/rand"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/libops/ppb/pkg/config"
 )
 
 type ReverseProxy struct {
-	Target    *url.URL
 	Transport *http.Transport
 	Config    *config.Config
-	Host      []string
-	Ip        []string
-	Trace     []string
+}
+
+type retryingDialer struct {
+	totalTimeout   time.Duration
+	attemptTimeout time.Duration
+	retryInterval  time.Duration
+	keepAlive      time.Duration
+	dial           func(context.Context, string, string) (net.Conn, error)
+	jitter         func(time.Duration) time.Duration
 }
 
 func New(c *config.Config) *ReverseProxy {
 	// Use configured timeout values (defaults already set in config loading)
 	dialTimeout := time.Duration(c.ProxyTimeouts.DialTimeout) * time.Second
+	dialAttemptTimeout := time.Duration(c.ProxyTimeouts.DialAttemptTimeout) * time.Second
+	dialRetryInterval := time.Duration(c.ProxyTimeouts.DialRetryInterval) * time.Second
 	keepAlive := time.Duration(c.ProxyTimeouts.KeepAlive) * time.Second
 	idleConnTimeout := time.Duration(c.ProxyTimeouts.IdleConnTimeout) * time.Second
 	tlsHandshakeTimeout := time.Duration(c.ProxyTimeouts.TLSHandshakeTimeout) * time.Second
 	expectContinueTimeout := time.Duration(c.ProxyTimeouts.ExpectContinueTimeout) * time.Second
 
-	scheme := c.Scheme
-	if c.ProxyTarget != nil && c.ProxyTarget.Scheme != "" {
-		scheme = c.ProxyTarget.Scheme
+	dialer := &retryingDialer{
+		totalTimeout:   dialTimeout,
+		attemptTimeout: dialAttemptTimeout,
+		retryInterval:  dialRetryInterval,
+		keepAlive:      keepAlive,
 	}
 	return &ReverseProxy{
-		Target: &url.URL{
-			Scheme: scheme,
-		},
 		Config: c,
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   dialTimeout,
-				KeepAlive: keepAlive,
-			}).DialContext,
-			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				dialer := &net.Dialer{
-					Timeout:   dialTimeout,
-					KeepAlive: keepAlive,
-				}
-				return tls.DialWithDialer(dialer, network, addr, nil)
-			},
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           dialer.DialContext,
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          c.ProxyTimeouts.MaxIdleConns,
 			IdleConnTimeout:       idleConnTimeout,
@@ -62,47 +61,180 @@ func New(c *config.Config) *ReverseProxy {
 	}
 }
 
-func (p *ReverseProxy) SetHost() {
+func (p *ReverseProxy) targetURL() (*url.URL, error) {
+	scheme := p.Config.Scheme
+	if p.Config.ProxyTarget != nil && p.Config.ProxyTarget.Scheme != "" {
+		scheme = p.Config.ProxyTarget.Scheme
+	}
+	if scheme != "http" && scheme != "https" {
+		return nil, fmt.Errorf("unsupported proxy target scheme %q", scheme)
+	}
+
 	if p.Config.ProxyTarget != nil && p.Config.ProxyTarget.Host != "" {
 		port := p.Config.ProxyTarget.Port
 		if port == 0 {
 			port = p.Config.Port
 		}
-		p.Target.Host = net.JoinHostPort(p.Config.ProxyTarget.Host, strconv.Itoa(port))
-		slog.Debug("Set proxy target host", "host", p.Target.Host)
-		return
+		return &url.URL{
+			Scheme: scheme,
+			Host:   net.JoinHostPort(p.Config.ProxyTarget.Host, strconv.Itoa(port)),
+		}, nil
 	}
-	p.Target.Host = net.JoinHostPort(
-		p.Config.Machine.Host(),
-		strconv.Itoa(p.Config.Port),
-	)
-	slog.Debug("Set machine host", "host", p.Target.Host)
+
+	host := p.Config.Machine.Host()
+	if host == "" {
+		return nil, errors.New("machine does not have a proxy target IP")
+	}
+	return &url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(host, strconv.Itoa(p.Config.Port)),
+	}, nil
 }
 
 func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	target, err := p.targetURL()
+	if err != nil {
+		slog.Warn("Proxy target is unavailable", "error", err)
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "Backend not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	forwardedFor := r.Header.Get("X-Forwarded-For")
+	forwardedHost := r.Host
+	trace := r.Header.Get("X-Cloud-Trace-Context")
+
 	rp := &httputil.ReverseProxy{
 		Transport: p.Transport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(p.Target)
-			pr.Out.Header["X-Cloud-Trace-Context"] = p.Trace
-			pr.Out.Header["X-Forwarded-For"] = p.Ip
-			pr.Out.Header["X-Forwarded-Host"] = p.Host
-			pr.Out.Header["X-Forwarded-Proto"] = []string{"https"}
+			pr.SetURL(target)
+			setOrDeleteHeader(pr.Out.Header, "X-Cloud-Trace-Context", trace)
+			setOrDeleteHeader(pr.Out.Header, "X-Forwarded-For", forwardedFor)
+			setOrDeleteHeader(pr.Out.Header, "X-Forwarded-Host", forwardedHost)
+			pr.Out.Header.Set("X-Forwarded-Proto", "https")
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			slog.Warn("Backend proxy request failed", "target", target.Redacted(), "error", err)
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "Backend not available", http.StatusServiceUnavailable)
 		},
 	}
 
 	rp.ServeHTTP(w, r)
 }
 
-func (p *ReverseProxy) SetRequestHeaders(r *http.Request) {
-	p.Ip = []string{
-		r.Header.Get("X-Forwarded-For"),
+func setOrDeleteHeader(header http.Header, name, value string) {
+	if value == "" {
+		header.Del(name)
+		return
 	}
-	p.Host = []string{
-		r.Host,
+	header.Set(name, value)
+}
+
+func (d *retryingDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	retryCtx, cancel := context.WithTimeout(ctx, d.totalTimeout)
+	defer cancel()
+
+	dial := d.dial
+	if dial == nil {
+		networkDialer := &net.Dialer{KeepAlive: d.keepAlive}
+		dial = networkDialer.DialContext
 	}
-	p.Trace = []string{
-		r.Header.Get("X-Cloud-Trace-Context"),
+
+	var lastErr error
+	retryDelay := d.retryInterval
+	for attempt := 1; ; attempt++ {
+		attemptTimeout := d.attemptTimeout
+		if deadline, ok := retryCtx.Deadline(); ok && time.Until(deadline) < attemptTimeout {
+			attemptTimeout = time.Until(deadline)
+		}
+		if attemptTimeout <= 0 {
+			return nil, d.exhaustedError(ctx, address, lastErr)
+		}
+
+		attemptCtx, attemptCancel := context.WithTimeout(retryCtx, attemptTimeout)
+		connection, err := dial(attemptCtx, network, address)
+		attemptCancel()
+		if err == nil {
+			return connection, nil
+		}
+		lastErr = err
+		if retryCtx.Err() != nil {
+			return nil, d.exhaustedError(ctx, address, lastErr)
+		}
+		if !isRetryableDialError(err) {
+			return nil, err
+		}
+
+		slog.Debug("Backend connection attempt failed; retrying", "address", address, "attempt", attempt, "error", err)
+		jitter := d.jitter
+		if jitter == nil {
+			jitter = jitteredDelay
+		}
+		timer := time.NewTimer(jitter(retryDelay))
+		select {
+		case <-retryCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, d.exhaustedError(ctx, address, lastErr)
+		case <-timer.C:
+		}
+		if retryDelay < 5*time.Second {
+			retryDelay *= 2
+			if retryDelay > 5*time.Second {
+				retryDelay = 5 * time.Second
+			}
+		}
 	}
-	slog.Debug("Request headers", "p.Ip", p.Ip, "p.Host", p.Host)
+}
+
+func (d *retryingDialer) exhaustedError(parent context.Context, address string, lastErr error) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if lastErr == nil {
+		return fmt.Errorf("backend %s did not accept a connection within %s", address, d.totalTimeout)
+	}
+	return fmt.Errorf("backend %s did not accept a connection within %s: %w", address, d.totalTimeout, lastErr)
+}
+
+func isRetryableDialError(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var addressError *net.AddrError
+	if errors.As(err, &addressError) {
+		return false
+	}
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) && !dnsError.IsTimeout && !dnsError.IsTemporary {
+		return false
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary()) {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ETIMEDOUT) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH)
+}
+
+func jitteredDelay(delay time.Duration) time.Duration {
+	// Spread simultaneous cold-start requests without making the configured
+	// interval an unbounded delay. The backoff remains within 75%-125%.
+	var randomByte [1]byte
+	if _, err := cryptorand.Read(randomByte[:]); err != nil {
+		return delay
+	}
+	factor := 0.75 + (float64(randomByte[0])/255.0)*0.5
+	return time.Duration(float64(delay) * factor)
 }

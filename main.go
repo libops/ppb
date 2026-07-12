@@ -67,7 +67,9 @@ func startPingRoutine(ctx context.Context, wg *sync.WaitGroup, c *config.Config,
 				slog.Debug("Ping failed", "url", pingURL, "error", err)
 				continue
 			}
-			resp.Body.Close()
+			if err := resp.Body.Close(); err != nil {
+				slog.Debug("Unable to close ping response body", "error", err)
+			}
 
 			slog.Debug("Ping successful", "url", pingURL, "status", resp.StatusCode)
 		}
@@ -83,11 +85,6 @@ func main() {
 
 	slog.Debug("Loaded config", "config", c)
 
-	// Set default cooldown interval if not specified
-	if c.PowerOnCooldown <= 0 {
-		c.PowerOnCooldown = 30
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sigChan := make(chan os.Signal, 1)
@@ -96,33 +93,12 @@ func main() {
 	wg.Add(1)
 	go startPingRoutine(ctx, &wg, c, 30*time.Second)
 
-	http.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintln(w, "OK")
-	})
-
 	p := proxy.New(c)
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if !c.IpIsAllowed(r) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-
-		// Attempt to power on machine with cooldown protection
-		reqCtx := context.Background()
-		err := c.Machine.PowerOnWithCooldown(reqCtx, c.PowerOnCooldown)
-		if err != nil {
-			slog.Error("Power-on attempt failed", "err", err)
-			http.Error(w, "Backend not available", http.StatusServiceUnavailable)
-			return
-		}
-
-		p.SetRequestHeaders(r)
-		p.SetHost()
-		p.ServeHTTP(w, r)
-	})
-
-	server := &http.Server{Addr: ":8080"}
+	server := &http.Server{
+		Addr:              ":8080",
+		Handler:           newHandler(c, p),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	go func() {
 		slog.Info("Server listening on :8080")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -142,4 +118,45 @@ func main() {
 
 	wg.Wait()
 	slog.Info("Shutdown complete")
+}
+
+func newHandler(c *config.Config, backend http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthcheck", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintln(w, "OK")
+	})
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		clientIP, err := c.AllowedClientIP(r)
+		if err != nil {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		// Do not pass attacker-controlled forwarding identities to the backend.
+		// Preserve one canonical, already validated original-client address.
+		r.Header.Del("Forwarded")
+		r.Header.Del("X-Forwarded-For")
+		r.Header.Del("X-Real-IP")
+		if c.IpForwardedHeader != "" {
+			r.Header.Del(c.IpForwardedHeader)
+		}
+		r.Header.Set("X-Forwarded-For", clientIP.String())
+
+		// Attempt to power on the machine within the request lifetime. Waiting
+		// requests can then be cancelled cleanly during disconnect or shutdown.
+		powerCtx, powerCancel := context.WithTimeout(r.Context(), time.Duration(c.PowerOnTimeout)*time.Second)
+		err = c.Machine.PowerOnWithCooldown(powerCtx, c.PowerOnCooldown)
+		powerCancel()
+		if err != nil {
+			slog.Error("Power-on attempt failed", "err", err)
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "Backend not available", http.StatusServiceUnavailable)
+			return
+		}
+
+		backend.ServeHTTP(w, r)
+	})
+	return mux
 }

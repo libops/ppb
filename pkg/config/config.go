@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/libops/ppb/pkg/machine"
 	yaml "gopkg.in/yaml.v3"
@@ -18,6 +19,7 @@ type Config struct {
 	IpForwardedHeader string         `yaml:"ipForwardedHeader"`
 	IpDepth           int            `yaml:"ipDepth"`
 	PowerOnCooldown   int            `yaml:"powerOnCooldown"` // seconds
+	PowerOnTimeout    int            `yaml:"powerOnTimeout"`  // seconds, default: 360
 	ProxyTimeouts     ProxyTimeouts  `yaml:"proxyTimeouts"`
 	MachineMetadata   map[string]any `yaml:"machineMetadata"`
 	ProxyTarget       *ProxyTarget   `yaml:"proxyTarget"`
@@ -36,7 +38,9 @@ type ProxyTarget struct {
 }
 
 type ProxyTimeouts struct {
-	DialTimeout           int `yaml:"dialTimeout"`           // seconds, default: 120
+	DialTimeout           int `yaml:"dialTimeout"`           // total connection retry window in seconds, default: 120
+	DialAttemptTimeout    int `yaml:"dialAttemptTimeout"`    // timeout for one connection attempt in seconds, default: 5
+	DialRetryInterval     int `yaml:"dialRetryInterval"`     // delay between connection attempts in seconds, default: 1
 	KeepAlive             int `yaml:"keepAlive"`             // seconds, default: 120
 	IdleConnTimeout       int `yaml:"idleConnTimeout"`       // seconds, default: 90
 	TLSHandshakeTimeout   int `yaml:"tlsHandshakeTimeout"`   // seconds, default: 10
@@ -79,7 +83,10 @@ func LoadConfig() (*Config, error) {
 			filename = "ppb.yaml"
 		}
 		slog.Debug("Loading config", "filename", filename)
-		data, err = os.ReadFile(filename)
+		// PPB_CONFIG_PATH is an intentional local operator interface, not a
+		// request-derived path. The unprivileged container may read any mounted
+		// configuration path selected by its deployer.
+		data, err = os.ReadFile(filename) // #nosec G304,G703 -- trusted deployment configuration
 		if err != nil {
 			return nil, err
 		}
@@ -91,6 +98,13 @@ func LoadConfig() (*Config, error) {
 	err = yaml.Unmarshal([]byte(expandedYaml), &config)
 	if err != nil {
 		return nil, err
+	}
+	config.IpForwardedHeader = strings.TrimSpace(config.IpForwardedHeader)
+	if config.IpDepth < 0 {
+		return nil, fmt.Errorf("ipDepth must not be negative")
+	}
+	if config.IpDepth > 0 && config.IpForwardedHeader == "" {
+		return nil, fmt.Errorf("ipForwardedHeader is required when ipDepth is greater than zero")
 	}
 
 	switch config.Type {
@@ -107,15 +121,31 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Set default proxy timeouts if not specified
+	config.setPowerDefaults()
 	config.setProxyTimeoutDefaults()
 
 	return &config, nil
+}
+
+func (c *Config) setPowerDefaults() {
+	if c.PowerOnCooldown <= 0 {
+		c.PowerOnCooldown = 30
+	}
+	if c.PowerOnTimeout <= 0 {
+		c.PowerOnTimeout = 360
+	}
 }
 
 // setProxyTimeoutDefaults sets default values for proxy timeouts if not configured
 func (c *Config) setProxyTimeoutDefaults() {
 	if c.ProxyTimeouts.DialTimeout <= 0 {
 		c.ProxyTimeouts.DialTimeout = 120
+	}
+	if c.ProxyTimeouts.DialAttemptTimeout <= 0 {
+		c.ProxyTimeouts.DialAttemptTimeout = 5
+	}
+	if c.ProxyTimeouts.DialRetryInterval <= 0 {
+		c.ProxyTimeouts.DialRetryInterval = 1
 	}
 	if c.ProxyTimeouts.KeepAlive <= 0 {
 		c.ProxyTimeouts.KeepAlive = 120

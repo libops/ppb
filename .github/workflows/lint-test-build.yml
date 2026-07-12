@@ -1,13 +1,21 @@
 name: build-push
 on:
+  pull_request:
   push:
+    branches:
+      - main
+    tags:
+      - "*"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   lint-test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -17,10 +25,12 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
-          version: latest
+          version: v2.12.2
 
       - name: Install dependencies
-        run: go get .
+        run: |
+          go mod download
+          go mod verify
 
       - run: go build
 
@@ -38,10 +48,21 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  run:
+  publish-ghcr:
+    if: github.event_name != 'pull_request'
     needs: [lint-test]
-    uses: libops/.github/.github/workflows/build-push.yaml@3ef8469c16c40842cc1b0b9195df2850ad8e616f # main
+    uses: libops/.github/.github/workflows/build-push.yaml@99995dd5fed7d8b77f10a86f3d20b6de0b0ba4bf # main
     permissions:
       contents: read
       packages: write
+
+  publish-gar:
+    if: github.event_name != 'pull_request'
+    needs: [lint-test]
+    uses: libops/.github/.github/workflows/build-push.yaml@99995dd5fed7d8b77f10a86f3d20b6de0b0ba4bf # main
+    with:
+      docker-registry: us-docker.pkg.dev/libops-images/public
+    permissions:
+      contents: read
+      id-token: write
     secrets: inherit
