@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	yaml "gopkg.in/yaml.v3"
@@ -136,6 +138,10 @@ func TestConfig_IpIsAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			testConfig := *config
+			if tt.forwardedFor == "" {
+				testConfig.IpForwardedHeader = ""
+			}
 			req := &http.Request{
 				RemoteAddr: tt.remoteAddr,
 				Header:     make(http.Header),
@@ -145,7 +151,7 @@ func TestConfig_IpIsAllowed(t *testing.T) {
 				req.Header.Set("X-Forwarded-For", tt.forwardedFor)
 			}
 
-			result := config.IpIsAllowed(req)
+			result := testConfig.IpIsAllowed(req)
 			if result != tt.expectedResult {
 				t.Errorf("Config.IpIsAllowed() = %v, want %v for IP %s (forwarded: %s)",
 					result, tt.expectedResult, tt.remoteAddr, tt.forwardedFor)
@@ -161,6 +167,8 @@ func TestConfig_getClientIP(t *testing.T) {
 		forwardedFor string
 		ipDepth      int
 		expectedIP   string
+		useHeader    bool
+		wantErr      bool
 	}{
 		{
 			name:       "no forwarded header",
@@ -172,6 +180,7 @@ func TestConfig_getClientIP(t *testing.T) {
 			remoteAddr:   "10.0.0.1:8080",
 			forwardedFor: "203.0.113.1",
 			expectedIP:   "203.0.113.1",
+			useHeader:    true,
 		},
 		{
 			name:         "multiple forwarded IPs, depth 0",
@@ -179,6 +188,7 @@ func TestConfig_getClientIP(t *testing.T) {
 			forwardedFor: "203.0.113.1, 198.51.100.1, 192.168.1.1",
 			ipDepth:      0,
 			expectedIP:   "192.168.1.1",
+			useHeader:    true,
 		},
 		{
 			name:         "multiple forwarded IPs, depth 1",
@@ -186,6 +196,30 @@ func TestConfig_getClientIP(t *testing.T) {
 			forwardedFor: "203.0.113.1, 198.51.100.1, 192.168.1.1",
 			ipDepth:      1,
 			expectedIP:   "198.51.100.1",
+			useHeader:    true,
+		},
+		{
+			name:         "attacker prefix cannot replace client behind one trusted proxy",
+			remoteAddr:   "10.0.0.1:8080",
+			forwardedFor: "10.0.0.8, 203.0.113.9, 192.0.2.10",
+			ipDepth:      1,
+			expectedIP:   "203.0.113.9",
+			useHeader:    true,
+		},
+		{
+			name:       "missing trusted header fails closed",
+			remoteAddr: "10.0.0.1:8080",
+			ipDepth:    0,
+			useHeader:  true,
+			wantErr:    true,
+		},
+		{
+			name:         "insufficient trusted hops fail closed",
+			remoteAddr:   "10.0.0.1:8080",
+			forwardedFor: "203.0.113.9",
+			ipDepth:      1,
+			useHeader:    true,
+			wantErr:      true,
 		},
 		{
 			name:       "IPv6 remote addr",
@@ -196,9 +230,9 @@ func TestConfig_getClientIP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := &Config{
-				IpForwardedHeader: "X-Forwarded-For",
-				IpDepth:           tt.ipDepth,
+			config := &Config{IpDepth: tt.ipDepth}
+			if tt.useHeader {
+				config.IpForwardedHeader = "X-Forwarded-For"
 			}
 
 			req := &http.Request{
@@ -210,7 +244,13 @@ func TestConfig_getClientIP(t *testing.T) {
 				req.Header.Set("X-Forwarded-For", tt.forwardedFor)
 			}
 
-			result := config.getClientIP(req)
+			result, err := config.getClientIP(req)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Config.getClientIP() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
 			if result.String() != tt.expectedIP {
 				t.Errorf("Config.getClientIP() = %v, want %v", result.String(), tt.expectedIP)
 			}
@@ -218,20 +258,38 @@ func TestConfig_getClientIP(t *testing.T) {
 	}
 }
 
-func TestConfig_PowerOnCooldownDefaultValue(t *testing.T) {
-	config := &Config{}
+func TestConfigGetClientIPUsesTheRightmostDuplicateHeaderValue(t *testing.T) {
+	t.Parallel()
 
-	// Test that default is applied in main.go logic
-	// (We can't easily test the main.go logic here, but we can test the field exists)
-	if config.PowerOnCooldown != 0 {
-		// Should start at 0, then main.go sets to 30 if <= 0
-		t.Errorf("PowerOnCooldown should start at 0, got %v", config.PowerOnCooldown)
+	config := &Config{
+		IpForwardedHeader: "X-Forwarded-For",
+		IpDepth:           0,
+	}
+	request := &http.Request{Header: make(http.Header)}
+	request.Header.Add("X-Forwarded-For", "10.0.0.8")
+	request.Header.Add("X-Forwarded-For", "203.0.113.9")
+
+	clientIP, err := config.getClientIP(request)
+	if err != nil {
+		t.Fatalf("getClientIP() error = %v", err)
+	}
+	if got := clientIP.String(); got != "203.0.113.9" {
+		t.Fatalf("getClientIP() = %s, want proxy-appended duplicate value", got)
+	}
+}
+
+func TestConfig_SetPowerDefaults(t *testing.T) {
+	config := &Config{}
+	config.setPowerDefaults()
+	if config.PowerOnCooldown != 30 || config.PowerOnTimeout != 360 {
+		t.Fatalf("power defaults = cooldown %d timeout %d, want 30 and 360", config.PowerOnCooldown, config.PowerOnTimeout)
 	}
 
-	// Test setting a custom value
 	config.PowerOnCooldown = 60
-	if config.PowerOnCooldown != 60 {
-		t.Errorf("PowerOnCooldown should be 60, got %v", config.PowerOnCooldown)
+	config.PowerOnTimeout = 480
+	config.setPowerDefaults()
+	if config.PowerOnCooldown != 60 || config.PowerOnTimeout != 480 {
+		t.Fatalf("configured power values = cooldown %d timeout %d, want 60 and 480", config.PowerOnCooldown, config.PowerOnTimeout)
 	}
 }
 
@@ -248,6 +306,8 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 			},
 			expected: ProxyTimeouts{
 				DialTimeout:           120,
+				DialAttemptTimeout:    5,
+				DialRetryInterval:     1,
 				KeepAlive:             120,
 				IdleConnTimeout:       90,
 				TLSHandshakeTimeout:   10,
@@ -265,6 +325,8 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 			},
 			expected: ProxyTimeouts{
 				DialTimeout:           60,  // custom
+				DialAttemptTimeout:    5,   // default
+				DialRetryInterval:     1,   // default
 				KeepAlive:             120, // default
 				IdleConnTimeout:       90,  // default
 				TLSHandshakeTimeout:   10,  // default
@@ -277,6 +339,8 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 			config: Config{
 				ProxyTimeouts: ProxyTimeouts{
 					DialTimeout:           30,
+					DialAttemptTimeout:    4,
+					DialRetryInterval:     2,
 					KeepAlive:             40,
 					IdleConnTimeout:       50,
 					TLSHandshakeTimeout:   5,
@@ -286,6 +350,8 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 			},
 			expected: ProxyTimeouts{
 				DialTimeout:           30,
+				DialAttemptTimeout:    4,
+				DialRetryInterval:     2,
 				KeepAlive:             40,
 				IdleConnTimeout:       50,
 				TLSHandshakeTimeout:   5,
@@ -301,6 +367,12 @@ func TestConfig_setProxyTimeoutDefaults(t *testing.T) {
 
 			if tt.config.ProxyTimeouts.DialTimeout != tt.expected.DialTimeout {
 				t.Errorf("DialTimeout = %v, want %v", tt.config.ProxyTimeouts.DialTimeout, tt.expected.DialTimeout)
+			}
+			if tt.config.ProxyTimeouts.DialAttemptTimeout != tt.expected.DialAttemptTimeout {
+				t.Errorf("DialAttemptTimeout = %v, want %v", tt.config.ProxyTimeouts.DialAttemptTimeout, tt.expected.DialAttemptTimeout)
+			}
+			if tt.config.ProxyTimeouts.DialRetryInterval != tt.expected.DialRetryInterval {
+				t.Errorf("DialRetryInterval = %v, want %v", tt.config.ProxyTimeouts.DialRetryInterval, tt.expected.DialRetryInterval)
 			}
 			if tt.config.ProxyTimeouts.KeepAlive != tt.expected.KeepAlive {
 				t.Errorf("KeepAlive = %v, want %v", tt.config.ProxyTimeouts.KeepAlive, tt.expected.KeepAlive)
@@ -375,6 +447,29 @@ machineMetadata:
 				}
 			}
 		})
+	}
+}
+
+func TestLoadConfigCheckedInExample(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() could not locate the test source")
+	}
+	t.Setenv("PPB_YAML", "")
+	t.Setenv("PPB_CONFIG_PATH", filepath.Join(filepath.Dir(sourceFile), "..", "..", "ppb.example.yaml"))
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() could not load ppb.example.yaml: %v", err)
+	}
+	if len(loaded.AllowedIps) != 2 {
+		t.Fatalf("ppb.example.yaml allowedIps = %+v, want two loopback networks", loaded.AllowedIps)
+	}
+	if loaded.IpForwardedHeader != "" {
+		t.Fatalf("ppb.example.yaml ipForwardedHeader = %q, want direct-client mode", loaded.IpForwardedHeader)
+	}
+	if loaded.PowerOnCooldown != 30 || loaded.PowerOnTimeout != 360 {
+		t.Fatalf("ppb.example.yaml power values = %d/%d, want 30/360", loaded.PowerOnCooldown, loaded.PowerOnTimeout)
 	}
 }
 

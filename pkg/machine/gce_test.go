@@ -2,6 +2,10 @@ package machine
 
 import (
 	"context"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -9,170 +13,217 @@ import (
 	compute "google.golang.org/api/compute/v1"
 )
 
-func TestGoogleComputeEngine_PowerOnWithCooldown(t *testing.T) {
-	tests := []struct {
-		name             string
-		cooldownSeconds  int
-		initialHost      string
-		timeBetweenCalls time.Duration
-		expectAPICall    bool
-		expectError      bool
-		needsSynctest    bool
-	}{
-		{
-			name:             "first call should always make API call",
-			cooldownSeconds:  30,
-			timeBetweenCalls: 0,
-			expectAPICall:    true,
-			expectError:      false,
-			needsSynctest:    false,
-		},
-		{
-			name:             "second call within cooldown should skip API call if host is set",
-			cooldownSeconds:  30,
-			initialHost:      "10.0.0.1",
-			timeBetweenCalls: 10 * time.Second,
-			expectAPICall:    false,
-			expectError:      false,
-			needsSynctest:    true,
-		},
-		{
-			name:             "second call within cooldown without host should return error",
-			cooldownSeconds:  30,
-			timeBetweenCalls: 10 * time.Second,
-			expectAPICall:    false,
-			expectError:      true,
-			needsSynctest:    true,
-		},
-		{
-			name:             "call after cooldown period should make API call",
-			cooldownSeconds:  5,
-			timeBetweenCalls: 6 * time.Second,
-			expectAPICall:    true,
-			expectError:      false,
-			needsSynctest:    true,
-		},
+func TestGoogleComputeEnginePowerOnFollowsStateSequence(t *testing.T) {
+	t.Parallel()
+
+	statuses := []string{"TERMINATED", "STAGING", "RUNNING"}
+	var statusMu sync.Mutex
+	statusIndex := 0
+	mutations := 0
+	m := NewGceMachine()
+	m.UsePrivateIp = true
+	m.pollInterval = time.Millisecond
+	m.getInstanceHook = func(context.Context) (*compute.Instance, error) {
+		statusMu.Lock()
+		defer statusMu.Unlock()
+		index := statusIndex
+		if index < len(statuses)-1 {
+			statusIndex++
+		}
+		return testInstance(statuses[index]), nil
+	}
+	m.powerOnHook = func(_ context.Context, status string) error {
+		mutations++
+		if status != "TERMINATED" {
+			t.Fatalf("powerOn status = %q, want TERMINATED", status)
+		}
+		return nil
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testFunc := func(t *testing.T) {
-				// Create machine instance
-				m := NewGceMachine()
-
-				// Set initial host if provided
-				if tt.initialHost != "" {
-					m.SetHostForTesting(tt.initialHost)
-				}
-
-				ctx := context.Background()
-
-				// Make first call (this will always attempt API call)
-				err1 := m.PowerOnWithCooldown(ctx, tt.cooldownSeconds)
-
-				if tt.timeBetweenCalls > 0 {
-					time.Sleep(tt.timeBetweenCalls)
-				}
-
-				// Make second call to test cooldown behavior
-				err2 := m.PowerOnWithCooldown(ctx, tt.cooldownSeconds)
-
-				if tt.expectError && err2 == nil {
-					t.Errorf("Expected error on second call but got none")
-				}
-				if !tt.expectError && err2 != nil && tt.initialHost != "" {
-					t.Errorf("Unexpected error on second call with host set: %v", err2)
-				}
-
-				_ = err1 // Avoid unused variable warning
-			}
-
-			if tt.needsSynctest {
-				synctest.Test(t, testFunc)
-			} else {
-				testFunc(t)
-			}
-		})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.PowerOn(ctx); err != nil {
+		t.Fatalf("PowerOn() error = %v", err)
+	}
+	if mutations != 1 {
+		t.Fatalf("power mutations = %d, want 1", mutations)
+	}
+	if host := m.Host(); host != "10.42.0.8" {
+		t.Fatalf("Host() = %q, want 10.42.0.8", host)
 	}
 }
 
-func TestGoogleComputeEngine_CooldownTimingLogic(t *testing.T) {
+func TestGoogleComputeEngineJoinsConflictingMutation(t *testing.T) {
+	t.Parallel()
+
+	statuses := []string{"TERMINATED", "STAGING", "RUNNING"}
+	statusIndex := 0
+	mutations := 0
+	m := NewGceMachine()
+	m.UsePrivateIp = true
+	m.pollInterval = time.Millisecond
+	m.joinTimeout = 50 * time.Millisecond
+	m.getInstanceHook = func(context.Context) (*compute.Instance, error) {
+		index := statusIndex
+		if index < len(statuses)-1 {
+			statusIndex++
+		}
+		return testInstance(statuses[index]), nil
+	}
+	m.powerOnHook = func(context.Context, string) error {
+		mutations++
+		return errors.New("instance is already starting")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.PowerOn(ctx); err != nil {
+		t.Fatalf("PowerOn() should join the competing transition: %v", err)
+	}
+	if mutations != 1 {
+		t.Fatalf("power mutations = %d, want 1", mutations)
+	}
+}
+
+func TestGoogleComputeEngineReturnsPermanentMutationError(t *testing.T) {
+	t.Parallel()
+
+	m := NewGceMachine()
+	m.pollInterval = time.Millisecond
+	m.joinTimeout = 5 * time.Millisecond
+	m.getInstanceHook = func(context.Context) (*compute.Instance, error) {
+		return testInstance("TERMINATED"), nil
+	}
+	m.powerOnHook = func(context.Context, string) error {
+		return errors.New("permission denied")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.PowerOn(ctx); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("PowerOn() error = %v, want permanent mutation failure", err)
+	}
+}
+
+func TestGoogleComputeEngineCooldownJoinsAcceptedTransition(t *testing.T) {
+	t.Parallel()
+
+	statuses := []string{"STAGING", "RUNNING"}
+	statusIndex := 0
+	mutations := 0
+	m := NewGceMachine()
+	m.UsePrivateIp = true
+	m.LastPowerOnAttempt = time.Now()
+	m.pollInterval = time.Millisecond
+	m.getInstanceHook = func(context.Context) (*compute.Instance, error) {
+		index := statusIndex
+		if index < len(statuses)-1 {
+			statusIndex++
+		}
+		return testInstance(statuses[index]), nil
+	}
+	m.powerOnHook = func(context.Context, string) error {
+		mutations++
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.PowerOnWithCooldown(ctx, 30); err != nil {
+		t.Fatalf("PowerOnWithCooldown() error = %v", err)
+	}
+	if mutations != 0 {
+		t.Fatalf("power mutations = %d, want no duplicate mutation", mutations)
+	}
+}
+
+func TestGoogleComputeEngineCooldownRetriesTerminalStateAfterWindow(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		started := false
+		mutations := 0
 		m := NewGceMachine()
-		cooldownSeconds := 2
-
-		// Set a mock host so we don't get "backend not available" errors
-		m.SetHostForTesting("10.0.0.1")
-
-		ctx := context.Background()
-
-		// First call - should set LastPowerOnAttempt
-		err1 := m.PowerOnWithCooldown(ctx, cooldownSeconds)
-		firstAttemptTime := m.LastPowerOnAttempt
-
-		// Immediate second call - should be in cooldown
-		err2 := m.PowerOnWithCooldown(ctx, cooldownSeconds)
-		secondAttemptTime := m.LastPowerOnAttempt
-
-		// The attempt time should not have changed (still in cooldown)
-		if !firstAttemptTime.Equal(secondAttemptTime) {
-			t.Errorf("Second call should not update LastPowerOnAttempt during cooldown")
+		m.UsePrivateIp = true
+		m.LastPowerOnAttempt = time.Now()
+		m.getInstanceHook = func(context.Context) (*compute.Instance, error) {
+			if started {
+				return testInstance("RUNNING"), nil
+			}
+			return testInstance("TERMINATED"), nil
+		}
+		m.powerOnHook = func(context.Context, string) error {
+			mutations++
+			started = true
+			return nil
 		}
 
-		// Advance time beyond cooldown period using fake clock
-		time.Sleep(time.Duration(cooldownSeconds+1) * time.Second)
-
-		// Third call - should update LastPowerOnAttempt
-		err3 := m.PowerOnWithCooldown(ctx, cooldownSeconds)
-		thirdAttemptTime := m.LastPowerOnAttempt
-
-		// The attempt time should have been updated
-		if !thirdAttemptTime.After(firstAttemptTime) {
-			t.Errorf("Third call should update LastPowerOnAttempt after cooldown expires")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := m.PowerOnWithCooldown(ctx, 2); err != nil {
+			t.Fatalf("PowerOnWithCooldown() error = %v", err)
 		}
-
-		// Note: These calls will likely fail due to GCP API authentication in test environment
-		// but that's okay - we're testing the timing logic, not the actual GCP integration
-		_ = err1
-		_ = err2
-		_ = err3
+		if mutations != 1 {
+			t.Fatalf("power mutations = %d, want one retry after cooldown", mutations)
+		}
 	})
 }
 
-func TestGoogleComputeEngine_ConcurrentCooldownCalls(t *testing.T) {
+func TestGoogleComputeEngineWaitUsesCallerDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := NewGceMachine()
-
-		// Set a mock host so we don't get "backend not available" errors
-		m.SetHostForTesting("10.0.0.1")
-
-		ctx := context.Background()
-		cooldownSeconds := 5
-
-		// Launch multiple concurrent calls
-		done := make(chan bool, 3)
-
-		for i := 0; i < 3; i++ {
-			go func() {
-				_ = m.PowerOnWithCooldown(ctx, cooldownSeconds)
-				done <- true
-			}()
+		m.getInstanceHook = func(context.Context) (*compute.Instance, error) {
+			return testInstance("STAGING"), nil
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		defer cancel()
 
-		// Wait for all goroutines to start and complete
-		synctest.Wait()
-
-		// Collect results
-		for i := 0; i < 3; i++ {
-			<-done
-		}
-
-		// Verify that the mutex protected the shared state properly
-		// (No specific assertion here, but the test would fail with race conditions if mutex wasn't working)
-		if m.LastPowerOnAttempt.IsZero() {
-			t.Error("Expected LastPowerOnAttempt to be set after concurrent calls")
+		err := m.PowerOn(ctx)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("PowerOn() error = %v, want caller deadline", err)
 		}
 	})
+}
+
+func TestGoogleComputeEngineConcurrentCooldownCallsUseCachedHost(t *testing.T) {
+	t.Parallel()
+
+	m := NewGceMachine()
+	m.SetHostForTesting("10.42.0.8")
+	m.LastPowerOnAttempt = time.Now()
+	var metadataCalls atomic.Int64
+	m.getInstanceHook = func(context.Context) (*compute.Instance, error) {
+		metadataCalls.Add(1)
+		return testInstance("RUNNING"), nil
+	}
+
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errorsCh <- m.PowerOnWithCooldown(context.Background(), 30)
+		}()
+	}
+	wg.Wait()
+	close(errorsCh)
+	for err := range errorsCh {
+		if err != nil {
+			t.Errorf("PowerOnWithCooldown() error = %v", err)
+		}
+	}
+	if calls := metadataCalls.Load(); calls != 0 {
+		t.Fatalf("metadata calls = %d, want cached host fast path", calls)
+	}
+}
+
+func testInstance(status string) *compute.Instance {
+	return &compute.Instance{
+		Name:   "test-instance",
+		Status: status,
+		NetworkInterfaces: []*compute.NetworkInterface{{
+			NetworkIP: "10.42.0.8",
+		}},
+	}
 }
 
 func TestGoogleComputeEngine_setIp(t *testing.T) {
@@ -330,5 +381,39 @@ func TestNewGceMachine(t *testing.T) {
 	// Should not be able to acquire another
 	if m.Lock.TryAcquire(1) {
 		t.Error("NewGceMachine() semaphore should not allow acquiring more than 1")
+	}
+}
+
+func TestClassifyInstanceStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status  string
+		action  instanceStatusAction
+		wantErr bool
+	}{
+		{status: "RUNNING", action: instanceReady},
+		{status: "TERMINATED", action: instanceStart},
+		{status: "SUSPENDED", action: instanceStart},
+		{status: "PROVISIONING", action: instanceWait},
+		{status: "STAGING", action: instanceWait},
+		{status: "STOPPING", action: instanceWait},
+		{status: "SUSPENDING", action: instanceWait},
+		{status: "REPAIRING", action: instanceWait},
+		{status: "UNKNOWN", action: instanceWait, wantErr: true},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.status, func(t *testing.T) {
+			t.Parallel()
+			action, err := classifyInstanceStatus(test.status)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("classifyInstanceStatus(%q) error = %v, wantErr %v", test.status, err, test.wantErr)
+			}
+			if action != test.action {
+				t.Fatalf("classifyInstanceStatus(%q) = %v, want %v", test.status, action, test.action)
+			}
+		})
 	}
 }

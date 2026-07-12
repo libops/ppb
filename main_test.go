@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -13,6 +15,86 @@ import (
 	"github.com/libops/ppb/pkg/config"
 	"github.com/libops/ppb/pkg/machine"
 )
+
+func TestHandlerPowerFailureReturnsRetryableUnavailable(t *testing.T) {
+	t.Parallel()
+
+	_, allowed, err := net.ParseCIDR("127.0.0.1/32")
+	if err != nil {
+		t.Fatalf("net.ParseCIDR() error = %v", err)
+	}
+	backendCalled := false
+	handler := newHandler(&config.Config{
+		AllowedIps:      []config.IPNet{{IPNet: allowed}},
+		PowerOnCooldown: 30,
+		PowerOnTimeout:  1,
+		Machine:         &machine.GoogleComputeEngine{},
+	}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		backendCalled = true
+	}))
+	request := httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
+	request.RemoteAddr = "127.0.0.1:12345"
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5", got)
+	}
+	if backendCalled {
+		t.Fatal("backend handler ran after power-on failure")
+	}
+}
+
+func TestHandlerCanonicalizesValidatedClientIdentity(t *testing.T) {
+	t.Parallel()
+
+	_, allowed, err := net.ParseCIDR("203.0.113.9/32")
+	if err != nil {
+		t.Fatalf("net.ParseCIDR() error = %v", err)
+	}
+	machine := machine.NewGceMachine()
+	machine.SetHostForTesting("10.42.0.8")
+	machine.LastPowerOnAttempt = time.Now()
+
+	backendCalled := false
+	handler := newHandler(&config.Config{
+		AllowedIps:        []config.IPNet{{IPNet: allowed}},
+		IpForwardedHeader: "X-Forwarded-For",
+		PowerOnCooldown:   30,
+		PowerOnTimeout:    1,
+		Machine:           machine,
+	}, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		backendCalled = true
+		if got := request.Header.Values("X-Forwarded-For"); len(got) != 1 || got[0] != "203.0.113.9" {
+			t.Errorf("X-Forwarded-For = %#v, want one validated client address", got)
+		}
+		if got := request.Header.Get("X-Real-IP"); got != "" {
+			t.Errorf("X-Real-IP = %q, want stripped", got)
+		}
+		if got := request.Header.Get("Forwarded"); got != "" {
+			t.Errorf("Forwarded = %q, want stripped", got)
+		}
+	}))
+	request := httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
+	request.Header.Add("X-Forwarded-For", "10.0.0.8")
+	request.Header.Add("X-Forwarded-For", "203.0.113.9")
+	request.Header.Set("X-Real-IP", "10.0.0.8")
+	request.Header.Set("Forwarded", "for=10.0.0.8")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if !backendCalled {
+		t.Fatal("backend handler was not called")
+	}
+}
 
 func TestStartPingRoutine_Integration(t *testing.T) {
 	// Track ping requests

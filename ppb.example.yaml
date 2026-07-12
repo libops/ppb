@@ -1,13 +1,18 @@
 type: google_compute_engine
 port: 80
 scheme: http
-allowedIps: ${ALLOWED_IPS:-127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128}
-ipForwardedHeader: X-Forwarded-For
+allowedIps:
+  - 127.0.0.1/32
+  - ::1/128
+ipForwardedHeader: ""
 ipDepth: 0
-powerOnCooldown: ${POWER_ON_COOLDOWN:-30}  # seconds between power-on attempts
+powerOnCooldown: 30  # seconds between power-on attempts
+powerOnTimeout: 360  # total queued/API/instance-ready budget
 # Optional proxy timeout configuration (defaults shown)
 proxyTimeouts:
-  dialTimeout: 120           # Connection dial timeout in seconds
+  dialTimeout: 120           # Total connection retry window in seconds
+  dialAttemptTimeout: 5      # Timeout for one connection attempt in seconds
+  dialRetryInterval: 1       # Delay between connection attempts in seconds
   keepAlive: 120            # TCP keep-alive timeout in seconds  
   idleConnTimeout: 90       # Idle connection timeout in seconds
   tlsHandshakeTimeout: 10   # TLS handshake timeout in seconds
@@ -18,4 +23,4 @@ machineMetadata:
   zone: us-central1-f
   name: compose-librechat
   # usePrivateIp=true means cloud run is using direct VPC egress to the machine
-  usePrivateIp: ${PRIVATE_IP:-false}
+  usePrivateIp: false
