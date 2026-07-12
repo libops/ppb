@@ -51,7 +51,7 @@ jobs:
   publish-ghcr:
     if: github.event_name != 'pull_request'
     needs: [lint-test]
-    uses: libops/.github/.github/workflows/build-push.yaml@99995dd5fed7d8b77f10a86f3d20b6de0b0ba4bf # main
+    uses: libops/.github/.github/workflows/build-push.yaml@3bdb895c3fd05490b0c6a1341e630ac554842468 # main
     permissions:
       contents: read
       packages: write
@@ -59,7 +59,7 @@ jobs:
   publish-gar:
     if: github.event_name != 'pull_request'
     needs: [lint-test]
-    uses: libops/.github/.github/workflows/build-push.yaml@99995dd5fed7d8b77f10a86f3d20b6de0b0ba4bf # main
+    uses: libops/.github/.github/workflows/build-push.yaml@3bdb895c3fd05490b0c6a1341e630ac554842468 # main
     with:
       docker-registry: us-docker.pkg.dev/libops-images/public
     permissions:
