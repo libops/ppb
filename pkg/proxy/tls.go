@@ -218,7 +218,7 @@ func isRetryableDialError(err error) bool {
 		return false
 	}
 	var networkError net.Error
-	if errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary()) {
+	if errors.As(err, &networkError) && networkError.Timeout() {
 		return true
 	}
 	return errors.Is(err, syscall.ECONNREFUSED) ||
