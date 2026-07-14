@@ -148,10 +148,13 @@ func newHandler(c *config.Config, backend http.Handler) http.Handler {
 		// requests can then be cancelled cleanly during disconnect or shutdown.
 		powerCtx, powerCancel := context.WithTimeout(r.Context(), time.Duration(c.PowerOnTimeout)*time.Second)
 		err = c.Machine.PowerOnWithCooldown(powerCtx, c.PowerOnCooldown)
+		powerTimedOut := powerCtx.Err() == context.DeadlineExceeded && r.Context().Err() == nil
 		powerCancel()
 		if err != nil {
 			slog.Error("Power-on attempt failed", "err", err)
-			w.Header().Set("Retry-After", "5")
+			if powerTimedOut {
+				w.Header().Set("Retry-After", "5")
+			}
 			http.Error(w, "Backend not available", http.StatusServiceUnavailable)
 			return
 		}

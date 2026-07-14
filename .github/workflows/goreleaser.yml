@@ -53,3 +53,19 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Keep the release run open until both registries have published the tag.
+  # This covers the normal release dispatch and a manually pushed tag without
+  # racing a second tag-triggered image workflow.
+  publish-images:
+    if: github.ref_type == 'tag'
+    needs: [test, goreleaser]
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: ./.github/workflows/lint-test-build.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      GCLOUD_OIDC_POOL: ${{ secrets.GCLOUD_OIDC_POOL }}
+      GSA: ${{ secrets.GSA }}

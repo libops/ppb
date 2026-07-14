@@ -294,11 +294,82 @@ func TestRetryingDialerBoundsConnectionWindow(t *testing.T) {
 	if err == nil {
 		t.Fatal("DialContext() unexpectedly succeeded")
 	}
+	var exhausted *dialExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("DialContext() error = %T %v, want dialExhaustedError", err, err)
+	}
 	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
 		t.Fatalf("DialContext() elapsed = %s, want a bounded retry window", elapsed)
 	}
 	if attempts < 2 {
 		t.Fatalf("dial attempts = %d, want retries within the bound", attempts)
+	}
+}
+
+func TestReverseProxyMissingTargetReturnsRetryAfter(t *testing.T) {
+	proxyHandler := New(&config.Config{
+		Scheme:  "http",
+		Port:    8080,
+		Machine: machine.NewGceMachine(),
+	})
+	request := httptest.NewRequest(http.MethodPost, "http://site.example.test/", strings.NewReader("not-dispatched"))
+	recorder := httptest.NewRecorder()
+
+	proxyHandler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5", got)
+	}
+}
+
+func TestReverseProxyDialExhaustionReturnsRetryAfter(t *testing.T) {
+	proxyHandler := New(&config.Config{
+		Scheme: "http",
+		Port:   8080,
+		ProxyTarget: &config.ProxyTarget{
+			Scheme: "http",
+			Host:   "backend.example.test",
+			Port:   8080,
+		},
+		ProxyTimeouts: config.ProxyTimeouts{
+			DialTimeout:           1,
+			DialAttemptTimeout:    1,
+			DialRetryInterval:     1,
+			KeepAlive:             1,
+			IdleConnTimeout:       1,
+			TLSHandshakeTimeout:   1,
+			ExpectContinueTimeout: 1,
+			MaxIdleConns:          10,
+		},
+		Machine: machine.NewGceMachine(),
+	})
+	attempts := 0
+	proxyHandler.Transport.DialContext = (&retryingDialer{
+		totalTimeout:   30 * time.Millisecond,
+		attemptTimeout: 5 * time.Millisecond,
+		retryInterval:  time.Millisecond,
+		jitter:         func(delay time.Duration) time.Duration { return delay },
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			attempts++
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+		},
+	}).DialContext
+	request := httptest.NewRequest(http.MethodPost, "http://site.example.test/", strings.NewReader("not-dispatched"))
+	recorder := httptest.NewRecorder()
+
+	proxyHandler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5", got)
+	}
+	if attempts < 2 {
+		t.Fatalf("dial attempts = %d, want a bounded retry sequence", attempts)
 	}
 }
 
@@ -492,6 +563,88 @@ func TestReverseProxyDialRetrySendsPostBodyExactlyOnce(t *testing.T) {
 	}
 	if dialAttempts != 3 {
 		t.Fatalf("dial attempts = %d, want 3", dialAttempts)
+	}
+}
+
+func TestReverseProxyPostConnectResetOmitsRetryAfterAndDoesNotReplayPost(t *testing.T) {
+	var mu sync.Mutex
+	requestCount := 0
+	requestBody := ""
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read backend request body: %v", err)
+			return
+		}
+		mu.Lock()
+		requestCount++
+		requestBody += string(body)
+		mu.Unlock()
+
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("backend response writer does not support hijacking")
+			return
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("hijack backend connection: %v", err)
+			return
+		}
+		_ = connection.Close()
+	}))
+	t.Cleanup(backend.Close)
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendHost, backendPortText, err := net.SplitHostPort(backendURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendPort, err := strconv.Atoi(backendPortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyHandler := New(&config.Config{
+		Scheme: "http",
+		Port:   backendPort,
+		ProxyTarget: &config.ProxyTarget{
+			Scheme: "http",
+			Host:   backendHost,
+			Port:   backendPort,
+		},
+		ProxyTimeouts: config.ProxyTimeouts{
+			DialTimeout:           2,
+			DialAttemptTimeout:    1,
+			DialRetryInterval:     1,
+			KeepAlive:             1,
+			IdleConnTimeout:       1,
+			TLSHandshakeTimeout:   1,
+			ExpectContinueTimeout: 1,
+			MaxIdleConns:          10,
+		},
+		Machine: machine.NewGceMachine(),
+	})
+	frontend := httptest.NewServer(proxyHandler)
+	t.Cleanup(frontend.Close)
+
+	response, err := http.Post(frontend.URL, "text/plain", strings.NewReader("one-copy"))
+	if err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("response status = %d, want %d", response.StatusCode, http.StatusServiceUnavailable)
+	}
+	if got := response.Header.Get("Retry-After"); got != "" {
+		t.Fatalf("Retry-After = %q, want omitted after an ambiguous post-connect failure", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requestCount != 1 || requestBody != "one-copy" {
+		t.Fatalf("backend received count=%d body=%q, want one exact request", requestCount, requestBody)
 	}
 }
 

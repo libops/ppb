@@ -1,4 +1,4 @@
-FROM ghcr.io/libops/base:main@sha256:389706a359c6ba0a4ffb9c3d21c0d909a1c2e5e0c4ab79cb5779129267207049 AS builder
+FROM ghcr.io/libops/go:1.26.5@sha256:ea764e85e42a243217c621891123b3fda9374674c29d59785414fc6b15815b3d AS builder
 
 SHELL ["/bin/ash", "-o", "pipefail", "-ex", "-c"]
 
@@ -14,7 +14,7 @@ COPY pkg ./pkg
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/binary .
 
-FROM ghcr.io/libops/base:main@sha256:389706a359c6ba0a4ffb9c3d21c0d909a1c2e5e0c4ab79cb5779129267207049
+FROM ghcr.io/libops/base:3.2.2.0@sha256:0c6bab5444d4758bb977a42c1e5199cba733c7776e1aa006f8021108a785c547
 
 COPY --from=builder /app/binary /app/binary
 

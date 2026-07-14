@@ -1,11 +1,17 @@
 name: build-push
 on:
+  workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+      GCLOUD_OIDC_POOL:
+        required: false
+      GSA:
+        required: false
   pull_request:
   push:
     branches:
       - main
-    tags:
-      - "*"
   workflow_dispatch:
 
 permissions:
@@ -48,21 +54,24 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  publish-ghcr:
+  # PPB is public in GHCR and also runs on Cloud Run. The shared workflow
+  # builds and scans each native image once, then publishes the same digest to
+  # both registries.
+  publish:
     if: github.event_name != 'pull_request'
     needs: [lint-test]
-    uses: libops/.github/.github/workflows/build-push.yaml@3bdb895c3fd05490b0c6a1341e630ac554842468 # main
+    uses: libops/.github/.github/workflows/build-push.yaml@a86300fb8020d0f7141bb9f833d89b5dbd7aa4d7 # guarded-signed-image-publisher
+    with:
+      ref: ${{ github.sha }}
+      expected-main-sha: ${{ github.ref == 'refs/heads/main' && github.sha || '' }}
+      additional-gar-registry: us-docker.pkg.dev/libops-images/public
+      scan: true
+      sign: true
+      certificate-identity: https://github.com/libops/.github/.github/workflows/build-push.yaml@a86300fb8020d0f7141bb9f833d89b5dbd7aa4d7
     permissions:
       contents: read
       packages: write
-
-  publish-gar:
-    if: github.event_name != 'pull_request'
-    needs: [lint-test]
-    uses: libops/.github/.github/workflows/build-push.yaml@3bdb895c3fd05490b0c6a1341e630ac554842468 # main
-    with:
-      docker-registry: us-docker.pkg.dev/libops-images/public
-    permissions:
-      contents: read
       id-token: write
-    secrets: inherit
+    secrets:
+      GCLOUD_OIDC_POOL: ${{ secrets.GCLOUD_OIDC_POOL }}
+      GSA: ${{ secrets.GSA }}

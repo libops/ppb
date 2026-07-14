@@ -22,6 +22,28 @@ type ReverseProxy struct {
 	Config    *config.Config
 }
 
+var errProxyTargetUnavailable = errors.New("machine does not have a proxy target IP")
+
+// dialExhaustedError means every failure happened before an origin connection
+// was established, so it is safe to tell the caller that the request can be
+// retried. Other RoundTrip errors can occur after a request was delivered.
+type dialExhaustedError struct {
+	address string
+	timeout time.Duration
+	cause   error
+}
+
+func (e *dialExhaustedError) Error() string {
+	if e.cause == nil {
+		return fmt.Sprintf("backend %s did not accept a connection within %s", e.address, e.timeout)
+	}
+	return fmt.Sprintf("backend %s did not accept a connection within %s: %v", e.address, e.timeout, e.cause)
+}
+
+func (e *dialExhaustedError) Unwrap() error {
+	return e.cause
+}
+
 type retryingDialer struct {
 	totalTimeout   time.Duration
 	attemptTimeout time.Duration
@@ -83,7 +105,7 @@ func (p *ReverseProxy) targetURL() (*url.URL, error) {
 
 	host := p.Config.Machine.Host()
 	if host == "" {
-		return nil, errors.New("machine does not have a proxy target IP")
+		return nil, errProxyTargetUnavailable
 	}
 	return &url.URL{
 		Scheme: scheme,
@@ -95,7 +117,9 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target, err := p.targetURL()
 	if err != nil {
 		slog.Warn("Proxy target is unavailable", "error", err)
-		w.Header().Set("Retry-After", "5")
+		if errors.Is(err, errProxyTargetUnavailable) {
+			w.Header().Set("Retry-After", "5")
+		}
 		http.Error(w, "Backend not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -115,7 +139,10 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			slog.Warn("Backend proxy request failed", "target", target.Redacted(), "error", err)
-			w.Header().Set("Retry-After", "5")
+			var exhausted *dialExhaustedError
+			if errors.As(err, &exhausted) {
+				w.Header().Set("Retry-After", "5")
+			}
 			http.Error(w, "Backend not available", http.StatusServiceUnavailable)
 		},
 	}
@@ -196,10 +223,11 @@ func (d *retryingDialer) exhaustedError(parent context.Context, address string, 
 	if err := parent.Err(); err != nil {
 		return err
 	}
-	if lastErr == nil {
-		return fmt.Errorf("backend %s did not accept a connection within %s", address, d.totalTimeout)
+	return &dialExhaustedError{
+		address: address,
+		timeout: d.totalTimeout,
+		cause:   lastErr,
 	}
-	return fmt.Errorf("backend %s did not accept a connection within %s: %w", address, d.totalTimeout, lastErr)
 }
 
 func isRetryableDialError(err error) bool {

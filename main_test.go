@@ -16,7 +16,7 @@ import (
 	"github.com/libops/ppb/pkg/machine"
 )
 
-func TestHandlerPowerFailureReturnsRetryableUnavailable(t *testing.T) {
+func TestHandlerPermanentPowerFailureOmitsRetryAfter(t *testing.T) {
 	t.Parallel()
 
 	_, allowed, err := net.ParseCIDR("127.0.0.1/32")
@@ -41,11 +41,50 @@ func TestHandlerPowerFailureReturnsRetryableUnavailable(t *testing.T) {
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
 	}
+	if got := recorder.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("Retry-After = %q, want omitted for a permanent power failure", got)
+	}
+	if backendCalled {
+		t.Fatal("backend handler ran after power-on failure")
+	}
+}
+
+func TestHandlerPowerTimeoutReturnsRetryableUnavailable(t *testing.T) {
+	t.Parallel()
+
+	_, allowed, err := net.ParseCIDR("127.0.0.1/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine := machine.NewGceMachine()
+	if err := machine.Lock.Acquire(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	defer machine.Lock.Release(1)
+
+	backendCalled := false
+	handler := newHandler(&config.Config{
+		AllowedIps:      []config.IPNet{{IPNet: allowed}},
+		PowerOnCooldown: 30,
+		PowerOnTimeout:  1,
+		Machine:         machine,
+	}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		backendCalled = true
+	}))
+	request := httptest.NewRequest(http.MethodPost, "http://example.test/", strings.NewReader("must-not-be-dispatched"))
+	request.RemoteAddr = "127.0.0.1:12345"
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
 	if got := recorder.Header().Get("Retry-After"); got != "5" {
 		t.Fatalf("Retry-After = %q, want 5", got)
 	}
 	if backendCalled {
-		t.Fatal("backend handler ran after power-on failure")
+		t.Fatal("backend handler ran after power-on timeout")
 	}
 }
 
