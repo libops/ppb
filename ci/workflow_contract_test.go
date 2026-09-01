@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-const sharedPublisherSHA = "a86300fb8020d0f7141bb9f833d89b5dbd7aa4d7"
-
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, current, _, ok := runtime.Caller(0)
@@ -32,12 +30,11 @@ func readRepositoryFile(t *testing.T, path ...string) string {
 func TestImagePublicationUsesGuardedSharedContract(t *testing.T) {
 	workflow := readRepositoryFile(t, ".github", "workflows", "lint-test-build.yml")
 	for _, required := range []string{
-		"libops/.github/.github/workflows/build-push.yaml@" + sharedPublisherSHA,
+		"libops/.github/.github/workflows/build-push.yaml@main",
 		"additional-gar-registry: us-docker.pkg.dev/libops-images/public",
 		"expected-main-sha:",
 		"scan: true",
 		"sign: true",
-		"certificate-identity: https://github.com/libops/.github/.github/workflows/build-push.yaml@" + sharedPublisherSHA,
 		"GCLOUD_OIDC_POOL: ${{ secrets.GCLOUD_OIDC_POOL }}",
 		"GSA: ${{ secrets.GSA }}",
 	} {
@@ -47,6 +44,9 @@ func TestImagePublicationUsesGuardedSharedContract(t *testing.T) {
 	}
 	if strings.Contains(workflow, "secrets: inherit") {
 		t.Fatal("image workflow must map only its required registry secrets")
+	}
+	if strings.Contains(workflow, "certificate-identity:") {
+		t.Fatal("image workflow must not override the managed publisher identity")
 	}
 }
 
