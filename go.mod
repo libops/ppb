@@ -1,10 +1,10 @@
 module github.com/libops/ppb
 
-go 1.25.0
+go 1.26.0
 
 require (
 	golang.org/x/sync v0.22.0
-	google.golang.org/api v0.296.0
+	google.golang.org/api v0.297.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
