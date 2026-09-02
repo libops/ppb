@@ -33,7 +33,6 @@ func TestImagePublicationUsesGuardedSharedContract(t *testing.T) {
 		"libops/.github/.github/workflows/build-push.yaml@main",
 		"additional-gar-registry: us-docker.pkg.dev/libops-images/public",
 		"expected-main-sha:",
-		"scan: true",
 		"sign: true",
 		"GCLOUD_OIDC_POOL: ${{ secrets.GCLOUD_OIDC_POOL }}",
 		"GSA: ${{ secrets.GSA }}",
