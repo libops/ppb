@@ -14,7 +14,7 @@ COPY pkg ./pkg
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/binary .
 
-FROM ghcr.io/libops/base:3.2.2.0@sha256:57b396fd8b681d626c89359e3f68618d4822f46c9364854c9d4747c25ab9d705
+FROM ghcr.io/libops/base:3.2.2.0@sha256:dcbc45a6f61b41d6e849c8920ebca58f26cd65414b3efafbaabc5d04fa95af9d
 
 COPY --from=builder /app/binary /app/binary
 
